@@ -45,7 +45,7 @@ class UniversalMachineSpec extends AnyWordSpec {
         A := alloc(C),
         D := 42,
         C := 0,
-        A.store(C, D),
+        A(C) = D,
         C := 0,
         B := A(C),
         output(B),
@@ -65,7 +65,7 @@ class UniversalMachineSpec extends AnyWordSpec {
         A := alloc(C),
         D := 99,
         C := 0,
-        A.store(C, D),
+        A(C) = D,
         C := 0,
         B := A(C),
         output(B),
@@ -81,7 +81,7 @@ class UniversalMachineSpec extends AnyWordSpec {
       val program = Array(
         A := 0,
         B := 65,
-        A.store(A, B),
+        A(A) = B,
         C := A(A),
         output(C),
         halt
@@ -300,7 +300,7 @@ class UniversalMachineSpec extends AnyWordSpec {
         A := alloc(B),
         D := 65,
         C := 0,
-        A.store(C, D),
+        A(C) = D,
         load(A, C),
         halt
       )
