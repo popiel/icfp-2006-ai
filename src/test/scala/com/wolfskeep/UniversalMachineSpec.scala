@@ -1,339 +1,358 @@
 package com.wolfkeep
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
-import org.scalatest.funsuite.AnyFunSuite
+import org.scalatest.wordspec.AnyWordSpec
 
-class UniversalMachineSpec extends AnyFunSuite {
+class UniversalMachineSpec extends AnyWordSpec {
+  import UMOps._
 
-  private def makeInstruction(op: Int, a: Int, b: Int, c: Int): Long = {
-    ((op & 0xF) << 28) | ((a & 0x7) << 6) | ((b & 0x7) << 3) | (c & 0x7)
+  "Conditional Move" should {
+    "copy register when C != 0" in {
+      val program = Array(
+        A := 42,
+        B := 100,
+        C := 1,
+        A := B when C,
+        output(A),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      um.run()
+      assert(out.toByteArray()(0).toInt == 100)
+    }
+
+    "not copy when C == 0" in {
+      val program = Array(
+        A := 42,
+        B := 100,
+        C := 0,
+        A := B when C,
+        output(A),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      um.run()
+      assert(out.toByteArray()(0).toInt == 42)
+    }
   }
 
-  private def makeOrthography(a: Int, value: Long): Long = {
-    ((13L & 0xFL) << 28) | ((a & 0x7L) << 25) | (value & 0xFFFFFFFFL)
+  "Array Index" should {
+    "read from array" in {
+      val program = Array(
+        C := 1,
+        A := alloc(C),
+        D := 42,
+        C := 0,
+        A.store(C, D),
+        C := 0,
+        B := A(C),
+        output(B),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      um.run()
+      assert(out.toByteArray()(0).toInt == 42)
+    }
   }
 
-  test("Conditional Move - copies register when C != 0") {
-    val program = Array(
-      makeOrthography(0, 42),
-      makeOrthography(1, 100),
-      makeOrthography(2, 1),
-      makeInstruction(0, 0, 1, 2),
-      makeInstruction(10, 0, 0, 0),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    assert(out.toByteArray()(0).toInt == 100)
+  "Array Amendment" should {
+    "write to array" in {
+      val program = Array(
+        C := 1,
+        A := alloc(C),
+        D := 99,
+        C := 0,
+        A.store(C, D),
+        C := 0,
+        B := A(C),
+        output(B),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      um.run()
+      assert(out.toByteArray()(0).toInt == 99)
+    }
+
+    "modify array 0 (program array)" in {
+      val program = Array(
+        A := 0,
+        B := 65,
+        A.store(A, B),
+        C := A(A),
+        output(C),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      um.run()
+      assert(out.toByteArray()(0).toInt == 65)
+    }
   }
 
-  test("Conditional Move - does not copy when C == 0") {
-    val program = Array(
-      makeOrthography(0, 42),
-      makeOrthography(1, 100),
-      makeOrthography(2, 0),
-      makeInstruction(0, 0, 1, 2),
-      makeInstruction(10, 0, 0, 0),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    assert(out.toByteArray()(0).toInt == 42)
+  "Addition" should {
+    "add registers modulo 2^32" in {
+      val program = Array(
+        A := 100,
+        B := 55,
+        C := A + B,
+        output(C),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      um.run()
+      assert((out.toByteArray()(0) & 0xFF).toInt == 155)
+    }
   }
 
-  test("Array Index - reads from array") {
-    val program = Array(
-      makeOrthography(1, 1),
-      makeOrthography(2, 1),
-      makeInstruction(8, 0, 1, 2),
-      makeOrthography(0, 42),
-      makeOrthography(2, 0),
-      makeInstruction(2, 1, 2, 0),
-      makeInstruction(1, 3, 1, 2),
-      makeInstruction(10, 0, 0, 3),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    assert(out.toByteArray()(0).toInt == 42)
+  "Multiplication" should {
+    "multiply registers modulo 2^32" in {
+      val program = Array(
+        A := 2,
+        B := 3,
+        C := A * B,
+        output(C),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      um.run()
+      assert(out.toByteArray()(0).toInt == 6)
+    }
   }
 
-  test("Array Amendment - writes to array") {
-    val program = Array(
-      makeOrthography(1, 1),
-      makeOrthography(2, 1),
-      makeInstruction(8, 0, 1, 2),
-      makeOrthography(3, 99),
-      makeOrthography(2, 0),
-      makeInstruction(2, 1, 2, 3),
-      makeInstruction(1, 4, 1, 2),
-      makeInstruction(10, 0, 0, 4),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    assert(out.toByteArray()(0).toInt == 99)
+  "Division" should {
+    "divide registers" in {
+      val program = Array(
+        A := 10,
+        B := 3,
+        C := A / B,
+        output(C),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      um.run()
+      assert(out.toByteArray()(0).toInt == 3)
+    }
   }
 
-  test("Addition - adds registers modulo 2^32") {
-    val program = Array(
-      makeOrthography(0, 100),
-      makeOrthography(1, 55),
-      makeInstruction(3, 2, 0, 1),
-      makeInstruction(10, 0, 0, 2),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    assert((out.toByteArray()(0) & 0xFF).toInt == 155)
-  }
-
-  test("Not-And - bitwise NAND") {
-    val program = Array(
-      makeOrthography(1, 1),
-      makeInstruction(8, 0, 3, 1),
-      makeOrthography(0, 0xF0),
-      makeOrthography(1, 0x0F),
-      makeInstruction(6, 2, 0, 1),
-      makeOrthography(4, 0),
-      makeInstruction(2, 3, 4, 2),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-  }
-
-  test("Multiplication - multiplies registers modulo 2^32") {
-    val program = Array(
-      makeOrthography(0, 2),
-      makeOrthography(1, 3),
-      makeInstruction(4, 2, 0, 1),
-      makeInstruction(10, 0, 0, 2),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    assert(out.toByteArray()(0).toInt == 6)
-  }
-
-  test("Division - divides registers") {
-    val program = Array(
-      makeOrthography(0, 10),
-      makeOrthography(1, 3),
-      makeInstruction(5, 2, 0, 1),
-      makeInstruction(10, 0, 0, 2),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    assert(out.toByteArray()(0).toInt == 3)
-  }
-
-  test("Halt - stops execution") {
-    val program = Array(
-      makeOrthography(0, 65),
-      makeInstruction(10, 0, 0, 0),
-      makeInstruction(7, 0, 0, 0),
-      makeInstruction(10, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    assert(out.toByteArray().length == 1)
-    assert(out.toByteArray()(0).toInt == 65)
-  }
-
-  test("Allocation - creates array and returns ID") {
-    val program = Array(
-      makeOrthography(1, 10),
-      makeInstruction(8, 0, 0, 1),
-      makeInstruction(10, 0, 0, 0),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    val outputBytes = out.toByteArray()
-    assert(outputBytes.length == 1)
-    assert(outputBytes(0).toInt == 1)
-  }
-
-  test("Allocation - reuses freed array IDs") {
-    val program = Array(
-      makeOrthography(1, 10),
-      makeInstruction(8, 0, 2, 1),
-      makeInstruction(9, 0, 0, 2),
-      makeOrthography(3, 10),
-      makeInstruction(8, 0, 4, 3),
-      makeInstruction(10, 0, 0, 4),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    val outputBytes = out.toByteArray()
-    assert(outputBytes.length == 1)
-    assert(outputBytes(0).toInt == 1)
-  }
-
-  test("Abandonment - deallocates array") {
-    val program = Array(
-      makeOrthography(1, 1),
-      makeInstruction(8, 0, 2, 1),
-      makeInstruction(9, 0, 0, 2),
-      makeInstruction(1, 0, 2, 2),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    val thrown = intercept[RuntimeException] {
+  "Not-And" should {
+    "perform bitwise NAND" in {
+      val program = Array(
+        A := 0xFF,
+        B := 0xFF,
+        C := A ^& B,
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
       um.run()
     }
-    assert(thrown.getMessage.contains("not active"))
   }
 
-  test("Output - outputs byte value") {
-    val program = Array(
-      makeOrthography(0, 72),
-      makeInstruction(10, 0, 0, 0),
-      makeOrthography(0, 101),
-      makeInstruction(10, 0, 0, 0),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    assert(out.toByteArray().sameElements(Array(72, 101)))
+  "Halt" should {
+    "stop execution" in {
+      val program = Array(
+        A := 65,
+        output(A),
+        halt,
+        output(A)
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      um.run()
+      assert(out.toByteArray().length == 1)
+      assert(out.toByteArray()(0).toInt == 65)
+    }
   }
 
-  test("Input - reads from input stream") {
-    val program = Array(
-      makeInstruction(11, 0, 0, 0),
-      makeInstruction(10, 0, 0, 0),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val input = Array[Byte](65)
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(input), out)
-    um.run()
-    assert(out.toByteArray()(0).toInt == 65)
+  "Allocation" should {
+    "create array and return ID" in {
+      val program = Array(
+        B := 10,
+        A := alloc(B),
+        output(A),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      um.run()
+      val outputBytes = out.toByteArray()
+      assert(outputBytes.length == 1)
+      assert(outputBytes(0).toInt == 1)
+    }
+
+    "reuse freed array IDs" in {
+      val program = Array(
+        B := 10,
+        A := alloc(B),
+        abandon(A),
+        D := 10,
+        A := alloc(D),
+        output(A),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      um.run()
+      val outputBytes = out.toByteArray()
+      assert(outputBytes.length == 1)
+      assert(outputBytes(0).toInt == 1)
+    }
   }
 
-  test("Input - returns 0xFF on EOF") {
-    val program = Array(
-      makeInstruction(11, 0, 0, 0),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
+  "Abandonment" should {
+    "deallocate array" in {
+      val program = Array(
+        C := 1,
+        A := alloc(C),
+        abandon(A),
+        C := 0,
+        B := A(C),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      val thrown = intercept[RuntimeException] {
+        um.run()
+      }
+      assert(thrown.getMessage.contains("not active"))
+    }
+
+    "fail on array 0" in {
+      val program = Array(
+        abandon(A),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      val thrown = intercept[RuntimeException] {
+        um.run()
+      }
+      assert(thrown.getMessage.contains("cannot abandon array 0"))
+    }
   }
 
-  test("Load Program - replaces program array") {
-    val program = Array(
-      makeOrthography(1, 2),
-      makeInstruction(8, 0, 2, 1),
-      makeOrthography(3, 65),
-      makeOrthography(0, 0),
-      makeInstruction(2, 2, 0, 3),
-      makeInstruction(12, 0, 2, 0),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    val bytes = out.toByteArray()
-    assert(bytes.length == 0)
+  "Output" should {
+    "output byte value" in {
+      val program = Array(
+        A := 72,
+        output(A),
+        A := 101,
+        output(A),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      um.run()
+      assert(out.toByteArray().sameElements(Array(72, 101)))
+    }
+
+    "fail on value > 255" in {
+      val program = Array(
+        A := 300,
+        output(A),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      val thrown = intercept[RuntimeException] {
+        um.run()
+      }
+      assert(thrown.getMessage.contains("exceeds 255"))
+    }
   }
 
-  test("Orthography - loads immediate value") {
-    val program = Array(
-      makeOrthography(0, 0x41),
-      makeInstruction(10, 0, 0, 0),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    assert(out.toByteArray()(0).toInt == 0x41)
-  }
+  "Input" should {
+    "read from input stream" in {
+      val program = Array(
+        input(A),
+        output(A),
+        halt
+      )
+      val inputBytes = Array[Byte](65)
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(inputBytes), out)
+      um.run()
+      assert(out.toByteArray()(0).toInt == 65)
+    }
 
-  test("Array Amendment - modifies array 0 (program array)") {
-    val program = Array(
-      makeOrthography(0, 0),
-      makeOrthography(1, 65),
-      makeInstruction(2, 0, 0, 1),
-      makeOrthography(2, 0),
-      makeInstruction(1, 3, 0, 2),
-      makeInstruction(10, 0, 0, 3),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    um.run()
-    assert(out.toByteArray()(0).toInt == 65)
-  }
-
-  test("Division by zero - fails") {
-    val program = Array(
-      makeOrthography(1, 0),
-      makeInstruction(5, 0, 0, 1),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    val thrown = intercept[RuntimeException] {
+    "return 0xFF on EOF" in {
+      val program = Array(
+        input(A),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
       um.run()
     }
-    assert(thrown.getMessage.contains("Division by zero"))
   }
 
-  test("Output - fails on value > 255") {
-    val program = Array(
-      makeOrthography(0, 300),
-      makeInstruction(10, 0, 0, 0),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    val thrown = intercept[RuntimeException] {
+  "Load Program" should {
+    "replace program array" in {
+      val program = Array(
+        B := 2,
+        A := alloc(B),
+        D := 65,
+        C := 0,
+        A.store(C, D),
+        load(A, C),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
       um.run()
+      val bytes = out.toByteArray()
+      assert(bytes.length == 0)
     }
-    assert(thrown.getMessage.contains("exceeds 255"))
+
+    "fail on inactive array" in {
+      val program = Array(
+        B := 99,
+        load(B, A),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      val thrown = intercept[RuntimeException] {
+        um.run()
+      }
+      assert(thrown.getMessage.contains("not active"))
+    }
   }
 
-  test("Abandonment - fails on array 0") {
-    val program = Array(
-      makeInstruction(9, 0, 0, 0),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    val thrown = intercept[RuntimeException] {
+  "Orthography" should {
+    "load immediate value" in {
+      val program = Array(
+        A := 0x41,
+        output(A),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
       um.run()
+      assert(out.toByteArray()(0).toInt == 0x41)
     }
-    assert(thrown.getMessage.contains("cannot abandon array 0"))
   }
 
-  test("Load Program - fails on inactive array") {
-    val program = Array(
-      makeOrthography(1, 99),
-      makeInstruction(12, 0, 1, 0),
-      makeInstruction(7, 0, 0, 0)
-    )
-    val out = new ByteArrayOutputStream()
-    val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-    val thrown = intercept[RuntimeException] {
-      um.run()
+  "Division by zero" should {
+    "fail" in {
+      val program = Array(
+        B := 0,
+        A := A / B,
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      val thrown = intercept[RuntimeException] {
+        um.run()
+      }
+      assert(thrown.getMessage.contains("Division by zero"))
     }
-    assert(thrown.getMessage.contains("not active"))
   }
 }
