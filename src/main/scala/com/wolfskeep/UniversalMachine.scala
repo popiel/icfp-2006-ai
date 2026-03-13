@@ -5,7 +5,7 @@ import java.io.{InputStream, OutputStream, IOException}
 class UniversalMachine(
   private val initialProgram: Array[Int],
   input: InputStream,
-  output: OutputStream
+  outputStream: OutputStream
 ) {
   private val registers = new Array[Int](8)
   private var arrays: Map[Int, Array[Int]] = Map()
@@ -20,87 +20,72 @@ class UniversalMachine(
       val instruction = arrays(0)(finger)
       finger += 1
 
-      implicit def r_to_i(r: Reg) = registers(r.idx)
-      case class Reg(val idx: Int) {
-        def := (value: Int) { registers(idx) = value }
-      }
-
       val op = (instruction >>> 28) & 0xF
-      def A = Reg((instruction >>>  6) & 7)
-      def B = Reg((instruction >>>  3) & 7)
-      def C = Reg((instruction >>>  0) & 7)
-      def D = Reg((instruction >>> 25) & 7)
-      def V = instruction & 0x01FFFFFF
+      val a = (instruction >>>  6) & 7
+      val b = (instruction >>>  3) & 7
+      val c = instruction & 7
+      val d = (instruction >>> 25) & 7
+      val v = instruction & 0x01FFFFFF
 
       op match {
-        case 0 => if (C.toInt != 0) A := B
-        case 1 => A := arrays(B)(C)
-        case 2 => arrays(A)(B) = C
-        case 3 => A := B + C
-        case 4 => A := ((B.toLong & 0xffffffffL) * (C.toLong & 0xffffffffL)).toInt
-        case 5 => A := ((B.toLong & 0xffffffffL) / (C.toLong & 0xffffffffL)).toInt
-        case 6 => A := ~(B & C)
+        case 0 => if (registers(c) != 0) registers(a) = registers(b)
+        case 1 => registers(a) = arrays(registers(b))(registers(c))
+        case 2 => arrays(registers(a))(registers(b)) = registers(c)
+        case 3 => registers(a) = registers(b) + registers(c)
+        case 4 => registers(a) = ((registers(b).toLong & 0xffffffffL) * (registers(c).toLong & 0xffffffffL)).toInt
+        case 5 => registers(a) = ((registers(b).toLong & 0xffffffffL) / (registers(c).toLong & 0xffffffffL)).toInt
+        case 6 => registers(a) = ~(registers(b) & registers(c))
         case 7 => running = false
         case 8 => {
           var newId = 1
           while (arrays contains newId) newId += 1
-          arrays += newId -> new Array[Int](C)
-          B := newId
+          arrays += newId -> new Array[Int](registers(c))
+          registers(b) = newId
         }
-        case 9 => if (C.toInt == 0) fail("cannot abandon array 0") else arrays -= C
-        case 10 => output(instruction)
-        case 11 => input(instruction)
+        case 9 => if (registers(c) == 0) fail("cannot abandon array 0") else arrays -= registers(c)
+        case 10 => {
+          val value = registers(c)
+          if (value > 255) {
+            fail(s"Output: value $value exceeds 255")
+          }
+          try {
+            outputStream.write(value.toInt)
+            outputStream.flush()
+          } catch {
+            case e: IOException => fail(s"Output failed: ${e.getMessage}")
+          }
+        }
+        case 11 => {
+          try {
+            val read = input.read()
+            if (read == -1) {
+              registers(c) = 0xFFFFFFFF
+            } else {
+              registers(c) = read & 0xFF
+            }
+          } catch {
+            case e: IOException => fail(s"Input failed: ${e.getMessage}")
+          }
+        }
         case 12 => {
-          if (B.toInt != 0) arrays += (0 -> arrays(B).clone())
-          finger = C
+          if (registers(b) != 0) arrays += (0 -> arrays(registers(b)).clone())
+          finger = registers(c)
         }
-        case 13 => D := V
+        case 13 => registers(d) = v
         case _ => fail(s"Unknown opcode: $op")
       }
     }
   }
 
-  private def regA(instruction: Int): Int = ((instruction >> 6) & 0x7).toInt
-  private def regB(instruction: Int): Int = ((instruction >> 3) & 0x7).toInt
-  private def regC(instruction: Int): Int = (instruction & 0x7).toInt
-
-  private def output(instruction: Int): Unit = {
-    val c = regC(instruction)
-    val value = registers(c)
-    if (value > 255) {
-      fail(s"Output: value $value exceeds 255")
-    }
-    try {
-      output.write(value.toInt)
-      output.flush()
-    } catch {
-      case e: IOException => fail(s"Output failed: ${e.getMessage}")
-    }
-  }
-
-  private def input(instruction: Int): Unit = {
-    val c = regC(instruction)
-    try {
-      val read = input.read()
-      if (read == -1) {
-        registers(c) = 0xFFFFFFFF
-      } else {
-        registers(c) = read & 0xFF
-      }
-    } catch {
-      case e: IOException => fail(s"Input failed: ${e.getMessage}")
-    }
-  }
-
   private def fail(message: String): Unit = {
-    val instruction = if (finger > 0 && (finger - 1) < arrays(0).length) arrays(0)(finger - 1) else -1
-    val op = ((instruction >>> 28) & 0xF).toInt
-    val a = ((instruction >>> 6) & 0x7).toInt
-    val b = ((instruction >>> 3) & 0x7).toInt
-    val c = (instruction & 0x7).toInt
+    val prevInstruction = if (finger > 0 && (finger - 1) < arrays(0).length) arrays(0)(finger - 1) else -1
+    val op = ((prevInstruction >>> 28) & 0xF).toInt
+    val regA = ((prevInstruction >>> 6) & 0x7).toInt
+    val regB = ((prevInstruction >>> 3) & 0x7).toInt
+    val regC = (prevInstruction & 0x7).toInt
 
     System.err.println(s"UM Error at finger position ${finger - 1}")
-    System.err.println(s"Instruction: op=$op, a=$a, b=$b, c=$c")
+    System.err.println(s"Instruction: op=$op, a=$regA, b=$regB, c=$regC")
     System.err.println(s"Registers: ${registers.mkString("[", ", ", "]")}")
     System.err.println(s"Message: $message")
 
