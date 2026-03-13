@@ -18,10 +18,8 @@ class UniversalMachine(
   def run(): Unit = {
     while (running && finger >= 0 && finger < arrays(0).length) {
       val instruction = arrays(0)(finger)
+      finger += 1
       execute(instruction)
-      if (running && finger >= 0 && finger < arrays(0).length) {
-        finger += 1
-      }
     }
   }
 
@@ -189,17 +187,18 @@ class UniversalMachine(
     val b = regB(instruction)
     val c = regC(instruction)
     val arrayId = registers(b).toInt
-    if (!arrays.contains(arrayId)) {
-      fail(s"Load program: array $arrayId not active")
+    if (arrayId != 0) {
+      if (!arrays.contains(arrayId)) {
+        fail(s"Load program: array $arrayId not active")
+      }
+      val sourceArray = arrays(arrayId)
+      val newProgram = sourceArray.clone()
+      arrays = arrays.updated(0, newProgram)
     }
-    val sourceArray = arrays(arrayId)
-    val newProgram = sourceArray.clone()
-    arrays = arrays.updated(0, newProgram)
     finger = registers(c).toInt
-    if (finger < 0 || finger >= newProgram.length) {
-      fail(s"Load program: finger position $finger out of bounds for array of length ${newProgram.length}")
+    if (finger < 0 || finger >= arrays(0).length) {
+      fail(s"Load program: finger position $finger out of bounds for array of length ${arrays(0).length}")
     }
-    finger -= 1
   }
 
   private def orthography(instruction: Long): Unit = {
@@ -209,18 +208,18 @@ class UniversalMachine(
   }
 
   private def fail(message: String): Unit = {
-    val instruction = if (finger >= 0 && finger < arrays(0).length) arrays(0)(finger) else -1
+    val instruction = if (finger > 0 && (finger - 1) < arrays(0).length) arrays(0)(finger - 1) else -1
     val op = ((instruction >>> 28) & 0xF).toInt
     val a = ((instruction >>> 6) & 0x7).toInt
     val b = ((instruction >>> 3) & 0x7).toInt
     val c = (instruction & 0x7).toInt
 
-    System.err.println(s"UM Error at finger position $finger")
+    System.err.println(s"UM Error at finger position ${finger - 1}")
     System.err.println(s"Instruction: op=$op, a=$a, b=$b, c=$c")
     System.err.println(s"Registers: ${registers.mkString("[", ", ", "]")}")
     System.err.println(s"Message: $message")
 
-    throw new RuntimeException(s"UM failed at position $finger: $message")
+    throw new RuntimeException(s"UM failed at position ${finger - 1}: $message")
   }
 }
 

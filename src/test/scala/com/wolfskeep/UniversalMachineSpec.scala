@@ -334,6 +334,33 @@ class UniversalMachineSpec extends AnyWordSpec with Matchers {
       val thrown = the [RuntimeException] thrownBy { um.run() }
       thrown.getMessage should include("not active")
     }
+
+    "replace array 0 when B != 0" in {
+      val program = Array(
+        C := 2,
+        A := alloc(C),
+        F := 42,
+        B := 0,
+        C := 16,
+        D := B(C),
+        E := 0,
+        A(E) := D,
+        C := 17,
+        D := B(C),
+        E := 1,
+        A(E) := D,
+        E := 0,
+        B(E) := D,
+        C := 0,
+        jump(A(C)),
+        output(F),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
+      um.run()
+      out.toByteArray()(0) should equal(42)
+    }
   }
 
   "Orthography" should {
