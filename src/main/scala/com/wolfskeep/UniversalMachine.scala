@@ -1,7 +1,7 @@
 package com.wolfkeep
 
 import java.io.{InputStream, OutputStream}
-import scala.collection.mutable.{HashMap, Stack}
+import scala.collection.mutable.Stack
 
 class UniversalMachine(
   private val initialProgram: Array[Int],
@@ -10,112 +10,122 @@ class UniversalMachine(
 ) {
   def run(): Unit = {
     val registers = new Array[Int](8)
-    val arrays = new HashMap[Int, Array[Int]]()
+    var arrays = new Array[Array[Int]](1024)
     arrays(0) = initialProgram.clone()
+    var arraysCapacity = 1024
     var nextArrayId = 1
     val availableArrayIds = new Stack[Int]()
     var finger = 0
+    var program = arrays(0)
+    val opcodeCounts = new Array[Long](14)
     while (true) {
-      val instruction = arrays(0)(finger)
+      val instruction = program(finger)
       finger += 1
 
       val op = (instruction >>> 28) & 0xF
-      op match {
-        case 0 => {
-          val a = (instruction >>> 6) & 7
-          val b = (instruction >>> 3) & 7
-          val c = instruction & 7
-          if (registers(c) != 0) registers(a) = registers(b)
-        }
-        case 1 => {
-          val a = (instruction >>> 6) & 7
-          val b = (instruction >>> 3) & 7
-          val c = instruction & 7
-          registers(a) = arrays(registers(b))(registers(c))
-        }
-        case 2 => {
-          val a = (instruction >>> 6) & 7
-          val b = (instruction >>> 3) & 7
-          val c = instruction & 7
-          arrays(registers(a))(registers(b)) = registers(c)
-        }
-        case 3 => {
-          val a = (instruction >>> 6) & 7
-          val b = (instruction >>> 3) & 7
-          val c = instruction & 7
-          registers(a) = registers(b) + registers(c)
-        }
-        case 4 => {
-          val a = (instruction >>> 6) & 7
-          val b = (instruction >>> 3) & 7
-          val c = instruction & 7
-          registers(a) = ((registers(b).toLong & 0xffffffffL) * (registers(c).toLong & 0xffffffffL)).toInt
-        }
-        case 5 => {
-          val a = (instruction >>> 6) & 7
-          val b = (instruction >>> 3) & 7
-          val c = instruction & 7
-          registers(a) = ((registers(b).toLong & 0xffffffffL) / (registers(c).toLong & 0xffffffffL)).toInt
-        }
-        case 6 => {
-          val a = (instruction >>> 6) & 7
-          val b = (instruction >>> 3) & 7
-          val c = instruction & 7
-          registers(a) = ~(registers(b) & registers(c))
-        }
-        case 7 => return
-        case 8 => {
-          val b = (instruction >>> 3) & 7
-          val c = instruction & 7
-          val newId = if (availableArrayIds.isEmpty) {
-            val id = nextArrayId
-            nextArrayId += 1
-            id
-          } else {
-            availableArrayIds.pop()
+      opcodeCounts(op) += 1
+      if (op == 13) {
+        val d = (instruction >>> 25) & 7
+        val v = instruction & 0x01FFFFFF
+        registers(d) = v
+      } else if (op == 1) {
+        val a = (instruction >>> 6) & 7
+        val b = (instruction >>> 3) & 7
+        val c = instruction & 7
+        registers(a) = arrays(registers(b))(registers(c))
+      } else if (op == 2) {
+        val a = (instruction >>> 6) & 7
+        val b = (instruction >>> 3) & 7
+        val c = instruction & 7
+        arrays(registers(a))(registers(b)) = registers(c)
+      } else if (op == 12) {
+        val b = (instruction >>> 3) & 7
+        val c = instruction & 7
+        if (registers(b) != 0) {
+          if (arrays(registers(b)) == null) {
+            throw new NoSuchElementException(s"Load program: array ${registers(b)} not active")
           }
-          arrays(newId) = new Array[Int](registers(c))
-          registers(b) = newId
+          arrays(0) = arrays(registers(b)).clone()
+          program = arrays(0)
         }
-        case 9 => {
-          val c = instruction & 7
-          if (registers(c) == 0) {
-            throw new IllegalArgumentException("cannot abandon array 0")
-          } else {
-            availableArrayIds.push(registers(c))
-            arrays.remove(registers(c))
+        finger = registers(c)
+      } else if (op == 6) {
+        val a = (instruction >>> 6) & 7
+        val b = (instruction >>> 3) & 7
+        val c = instruction & 7
+        registers(a) = ~(registers(b) & registers(c))
+      } else if (op == 0) {
+        val a = (instruction >>> 6) & 7
+        val b = (instruction >>> 3) & 7
+        val c = instruction & 7
+        if (registers(c) != 0) registers(a) = registers(b)
+      } else if (op == 3) {
+        val a = (instruction >>> 6) & 7
+        val b = (instruction >>> 3) & 7
+        val c = instruction & 7
+        registers(a) = registers(b) + registers(c)
+      } else if (op == 4) {
+        val a = (instruction >>> 6) & 7
+        val b = (instruction >>> 3) & 7
+        val c = instruction & 7
+        registers(a) = ((registers(b).toLong & 0xffffffffL) * (registers(c).toLong & 0xffffffffL)).toInt
+      } else if (op == 5) {
+        val a = (instruction >>> 6) & 7
+        val b = (instruction >>> 3) & 7
+        val c = instruction & 7
+        registers(a) = ((registers(b).toLong & 0xffffffffL) / (registers(c).toLong & 0xffffffffL)).toInt
+      } else if (op == 7) {
+        for (i <- opcodeCounts.indices.sortBy(opcodeCounts)) {
+          System.err.println(s"Opcode $i: ${opcodeCounts(i)}")
+        }
+        return
+      } else if (op == 8) {
+        val b = (instruction >>> 3) & 7
+        val c = instruction & 7
+        val newId = if (availableArrayIds.isEmpty) {
+          val id = nextArrayId
+          nextArrayId += 1
+          id
+        } else {
+          availableArrayIds.pop()
+        }
+        if (newId >= arraysCapacity) {
+          val newCapacity = arraysCapacity + 1024
+          val newArrays = new Array[Array[Int]](newCapacity)
+          for (i <- 0 until arraysCapacity) {
+            newArrays(i) = arrays(i)
           }
+          arrays = newArrays
+          arraysCapacity = newCapacity
         }
-        case 10 => {
-          val c = instruction & 7
-          val value = registers(c)
-          if (value > 255) {
-            throw new IllegalArgumentException(s"Output: value $value exceeds 255")
-          }
-          outputStream.write(value.toInt)
-          outputStream.flush()
+        arrays(newId) = new Array[Int](registers(c))
+        registers(b) = newId
+      } else if (op == 9) {
+        val c = instruction & 7
+        if (registers(c) == 0) {
+          throw new IllegalArgumentException("cannot abandon array 0")
+        } else {
+          availableArrayIds.push(registers(c))
+          arrays(registers(c)) = null
         }
-        case 11 => {
-          val c = instruction & 7
-          val read = input.read()
-          if (read == -1) {
-            registers(c) = 0xFFFFFFFF
-          } else {
-            registers(c) = read & 0xFF
-          }
+      } else if (op == 10) {
+        val c = instruction & 7
+        val value = registers(c)
+        if (value > 255) {
+          throw new IllegalArgumentException(s"Output: value $value exceeds 255")
         }
-        case 12 => {
-          val b = (instruction >>> 3) & 7
-          val c = instruction & 7
-          if (registers(b) != 0) arrays(0) = arrays(registers(b)).clone()
-          finger = registers(c)
+        outputStream.write(value.toInt)
+        outputStream.flush()
+      } else if (op == 11) {
+        val c = instruction & 7
+        val read = input.read()
+        if (read == -1) {
+          registers(c) = 0xFFFFFFFF
+        } else {
+          registers(c) = read & 0xFF
         }
-        case 13 => {
-          val d = (instruction >>> 25) & 7
-          val v = instruction & 0x01FFFFFF
-          registers(d) = v
-        }
-        case _ => throw new IllegalArgumentException(s"Unknown opcode: $op")
+      } else {
+        throw new IllegalArgumentException(s"Unknown opcode: $op")
       }
     }
   }
