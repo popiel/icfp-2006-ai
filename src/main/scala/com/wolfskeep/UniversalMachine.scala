@@ -1,4 +1,4 @@
-package com.wolfkeep
+package com.wolfskeep
 
 import java.io.{InputStream, OutputStream}
 import scala.collection.mutable.Stack
@@ -23,7 +23,7 @@ class UniversalMachine(
       finger += 1
 
       val op = (instruction >>> 28) & 0xF
-      opcodeCounts(op) += 1
+      // opcodeCounts(op) += 1
       if (op == 13) {
         val d = (instruction >>> 25) & 7
         val v = instruction & 0x01FFFFFF
@@ -75,9 +75,11 @@ class UniversalMachine(
         val c = instruction & 7
         registers(a) = ((registers(b).toLong & 0xffffffffL) / (registers(c).toLong & 0xffffffffL)).toInt
       } else if (op == 7) {
+        /*
         for (i <- opcodeCounts.indices.sortBy(opcodeCounts)) {
           System.err.println(s"Opcode $i: ${opcodeCounts(i)}")
         }
+        */
         return
       } else if (op == 8) {
         val b = (instruction >>> 3) & 7

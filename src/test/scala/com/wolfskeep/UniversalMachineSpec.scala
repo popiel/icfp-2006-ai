@@ -1,4 +1,4 @@
-package com.wolfkeep
+package com.wolfskeep
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import org.scalatest.wordspec.AnyWordSpec

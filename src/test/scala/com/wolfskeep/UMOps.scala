@@ -1,4 +1,4 @@
-package com.wolfkeep
+package com.wolfskeep
 
 sealed trait Reg {
   val index: Int
