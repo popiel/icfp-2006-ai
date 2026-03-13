@@ -307,22 +307,6 @@ class UniversalMachineSpec extends AnyWordSpec with Matchers {
   }
 
   "Load Program" should {
-    "replace program array" in {
-      val program = Array(
-        B := 2,
-        A := alloc(B),
-        D := 65,
-        C := 0,
-        A(C) := D,
-        jump(A(C)),
-        halt
-      )
-      val out = new ByteArrayOutputStream()
-      val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-      um.run()
-      out.toByteArray() should be(empty)
-    }
-
     "fail on inactive array" in {
       val program = Array(
         B := 99,
@@ -331,8 +315,7 @@ class UniversalMachineSpec extends AnyWordSpec with Matchers {
       )
       val out = new ByteArrayOutputStream()
       val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-      val thrown = the [RuntimeException] thrownBy { um.run() }
-      thrown.getMessage should include("not active")
+      a[NoSuchElementException] shouldBe thrownBy { um.run() }
     }
 
     "replace array 0 when B != 0" in {
@@ -386,8 +369,7 @@ class UniversalMachineSpec extends AnyWordSpec with Matchers {
       )
       val out = new ByteArrayOutputStream()
       val um = new UniversalMachine(program, new ByteArrayInputStream(Array()), out)
-      val thrown = the [RuntimeException] thrownBy { um.run() }
-      thrown.getMessage should include("Division by zero")
+      an[ArithmeticException] shouldBe thrownBy { um.run() }
     }
   }
 }

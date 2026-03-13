@@ -14,31 +14,31 @@ case object G extends Reg { val index = 6 }
 case object H extends Reg { val index = 7 }
 
 object UMOps {
-  private def makeInstruction(op: Int, a: Int, b: Int, c: Int): Long = {
+  private def makeInstruction(op: Int, a: Int, b: Int, c: Int): Int = {
     ((op & 0xF) << 28) | ((a & 0x7) << 6) | ((b & 0x7) << 3) | (c & 0x7)
   }
 
-  private def makeOrthography(a: Int, value: Long): Long = {
-    ((13L & 0xFL) << 28) | ((a & 0x7L) << 25) | (value & 0xFFFFFFFFL)
+  private def makeOrthography(a: Int, value: Int): Int = {
+    (13 << 28) | ((a & 0x7) << 25) | (value & 0xFFFFFFFF)
   }
 
   // Expression types
   case class ArithExpr(lhs: Reg, rhs: Reg, op: Int)
   case class CMovExpr(b: Reg, c: Reg)
   case class ArrayIdx(arr: Reg, idx: Reg) {
-    def :=(value: Reg): Long = makeInstruction(2, arr.index, idx.index, value.index)
+    def :=(value: Reg) = makeInstruction(2, arr.index, idx.index, value.index)
   }
 
   // Unified implicit class for Reg := operations
   implicit class RegOps(r: Reg) {
-    def :=(value: Long): Long = makeOrthography(r.index, value)
-    def :=(expr: ArithExpr): Long = makeInstruction(expr.op, r.index, expr.lhs.index, expr.rhs.index)
-    def :=(expr: CMovExpr): Long = makeInstruction(0, r.index, expr.b.index, expr.c.index)
-    def :=(expr: ArrayIdx): Long = makeInstruction(1, r.index, expr.arr.index, expr.idx.index)
-    def :=(expr: AllocResult): Long = makeInstruction(8, 0, r.index, expr.size.index)
+    def :=(value: Int) = makeOrthography(r.index, value)
+    def :=(expr: ArithExpr) = makeInstruction(expr.op, r.index, expr.lhs.index, expr.rhs.index)
+    def :=(expr: CMovExpr) = makeInstruction(0, r.index, expr.b.index, expr.c.index)
+    def :=(expr: ArrayIdx) = makeInstruction(1, r.index, expr.arr.index, expr.idx.index)
+    def :=(expr: AllocResult) = makeInstruction(8, 0, r.index, expr.size.index)
     
     // Array index: A(B) returns ArrayIdx
-    def apply(idx: Reg): ArrayIdx = ArrayIdx(r, idx)
+    def apply(idx: Reg) = ArrayIdx(r, idx)
   }
 
   // Arithmetic: A := B + C, A := B * C, A := B / C, A := B ^& C
@@ -59,13 +59,13 @@ object UMOps {
   def alloc(c: Reg): AllocResult = new AllocResult(c)
 
   // Other instructions
-  def halt: Long = makeInstruction(7, 0, 0, 0)
+  def halt = makeInstruction(7, 0, 0, 0)
 
-  def abandon(c: Reg): Long = makeInstruction(9, 0, 0, c.index)
+  def abandon(c: Reg) = makeInstruction(9, 0, 0, c.index)
 
-  def input(c: Reg): Long = makeInstruction(11, 0, 0, c.index)
+  def input(c: Reg) = makeInstruction(11, 0, 0, c.index)
 
-  def output(c: Reg): Long = makeInstruction(10, 0, 0, c.index)
+  def output(c: Reg) = makeInstruction(10, 0, 0, c.index)
 
-  def jump(expr: ArrayIdx): Long = makeInstruction(12, 0, expr.arr.index, expr.idx.index)
+  def jump(expr: ArrayIdx) = makeInstruction(12, 0, expr.arr.index, expr.idx.index)
 }
