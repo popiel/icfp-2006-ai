@@ -1,6 +1,7 @@
 package com.wolfkeep
 
 import java.io.{InputStream, OutputStream}
+import scala.collection.mutable.{HashMap, Stack}
 
 class UniversalMachine(
   private val initialProgram: Array[Int],
@@ -9,9 +10,10 @@ class UniversalMachine(
 ) {
   def run(): Unit = {
     val registers = new Array[Int](8)
-    var arrays: Map[Int, Array[Int]] = Map(0 -> initialProgram.clone())
+    val arrays = new HashMap[Int, Array[Int]]()
+    arrays(0) = initialProgram.clone()
     var nextArrayId = 1
-    var availableArrayIds: List[Int] = Nil
+    val availableArrayIds = new Stack[Int]()
     var finger = 0
     while (true) {
       val instruction = arrays(0)(finger)
@@ -65,16 +67,14 @@ class UniversalMachine(
         case 8 => {
           val b = (instruction >>> 3) & 7
           val c = instruction & 7
-          val newId = if (availableArrayIds != Nil) {
-            val id = availableArrayIds.head
-            availableArrayIds = availableArrayIds.tail
-            id
-          } else {
+          val newId = if (availableArrayIds.isEmpty) {
             val id = nextArrayId
             nextArrayId += 1
             id
+          } else {
+            availableArrayIds.pop()
           }
-          arrays += newId -> new Array[Int](registers(c))
+          arrays(newId) = new Array[Int](registers(c))
           registers(b) = newId
         }
         case 9 => {
@@ -82,8 +82,8 @@ class UniversalMachine(
           if (registers(c) == 0) {
             throw new IllegalArgumentException("cannot abandon array 0")
           } else {
-            availableArrayIds = registers(c) :: availableArrayIds
-            arrays -= registers(c)
+            availableArrayIds.push(registers(c))
+            arrays.remove(registers(c))
           }
         }
         case 10 => {
@@ -107,7 +107,7 @@ class UniversalMachine(
         case 12 => {
           val b = (instruction >>> 3) & 7
           val c = instruction & 7
-          if (registers(b) != 0) arrays += (0 -> arrays(registers(b)).clone())
+          if (registers(b) != 0) arrays(0) = arrays(registers(b)).clone()
           finger = registers(c)
         }
         case 13 => {
