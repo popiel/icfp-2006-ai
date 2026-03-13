@@ -120,7 +120,9 @@ class UniversalMachine(
     val a = regA(instruction)
     val b = regB(instruction)
     val c = regC(instruction)
-    registers(a) = (~(registers(b) & registers(c))) & 0xFFFFFFFFL
+    val bVal = (registers(b) & 0xFFFFFFFFL).toInt
+    val cVal = (registers(c) & 0xFFFFFFFFL).toInt
+    registers(a) = (~(bVal & cVal)) & 0xFFFFFFFFL
   }
 
   private def halt(): Unit = {

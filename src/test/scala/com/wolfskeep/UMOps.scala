@@ -25,7 +25,9 @@ object UMOps {
   // Expression types
   case class ArithExpr(lhs: Reg, rhs: Reg, op: Int)
   case class CMovExpr(b: Reg, c: Reg)
-  case class ArrayIdx(arr: Reg, idx: Reg)
+  case class ArrayIdx(arr: Reg, idx: Reg) {
+    def :=(value: Reg): Long = makeInstruction(2, arr.index, idx.index, value.index)
+  }
 
   // Unified implicit class for Reg := operations
   implicit class RegOps(r: Reg) {
@@ -37,8 +39,6 @@ object UMOps {
     
     // Array index: A(B) returns ArrayIdx
     def apply(idx: Reg): ArrayIdx = ArrayIdx(r, idx)
-    // Array amendment: A(B) = C (uses Scala's update method)
-    def update(idx: Reg, value: Reg): Long = makeInstruction(2, r.index, idx.index, value.index)
   }
 
   // Arithmetic: A := B + C, A := B * C, A := B / C, A := B ^& C
@@ -67,5 +67,5 @@ object UMOps {
 
   def output(c: Reg): Long = makeInstruction(10, 0, 0, c.index)
 
-  def load(b: Reg, c: Reg): Long = makeInstruction(12, 0, b.index, c.index)
+  def jump(expr: ArrayIdx): Long = makeInstruction(12, 0, expr.arr.index, expr.idx.index)
 }
