@@ -285,12 +285,17 @@ case class Block(
     cw.visitEnd()
     
     val bytes = cw.toByteArray()
-    val loader = new ClassLoader() {
-      def loadClass(name: String, b: Array[Byte]): Class[_] = {
-        defineClass(null, b, 0, b.length)
+    val parentLoader = Thread.currentThread().getContextClassLoader
+    val loader = new ClassLoader(parentLoader) {
+      override def findClass(name: String): Class[_] = {
+        if (name == className) {
+          defineClass(null, bytes, 0, bytes.length)
+        } else {
+          super.findClass(name)
+        }
       }
     }
-    val clazz = loader.loadClass(className, bytes)
+    val clazz = loader.loadClass(className)
     compiledBlock = clazz.newInstance().asInstanceOf[CompiledBlock]
     compiledBlock
   }
@@ -321,26 +326,27 @@ case class Block(
         mv.visitInsn(IRETURN)
       
       case ArrayIndex(a, b, c) =>
-        // Load from MachineState.arrays[b][c] and store in register a
         generateComputation(mv, b)
         mv.visitFieldInsn(GETSTATIC, "com/wolfskeep/MachineState", "arrays", "[[I")
         mv.visitInsn(SWAP)
         mv.visitInsn(AALOAD)
         generateComputation(mv, c)
         mv.visitInsn(IALOAD)
-        // Store result in register a
         mv.visitVarInsn(ALOAD, 1)
+        mv.visitInsn(SWAP)
         mv.visitIntInsn(BIPUSH, a)
         mv.visitInsn(SWAP)
         mv.visitInsn(IASTORE)
       
       case ArrayAmendment(a, b, c, finger) =>
-        // Optimize: only call helper if amending array 0
-        // arrays[a][b] = c
         generateComputation(mv, a)
         
-        if (a.knownValues.exists(_.notZero)) {
-          // a is known to be non-zero, do direct array store
+        if (a.knownValues.exists(_.isZero)) {
+          generateComputation(mv, b)
+          generateComputation(mv, c)
+          mv.visitLdcInsn(finger)
+          mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "amendArray", "(IIII)V", false)
+        } else if (a.knownValues.exists(_.notZero)) {
           mv.visitFieldInsn(GETSTATIC, "com/wolfskeep/MachineState", "arrays", "[[I")
           mv.visitInsn(SWAP)
           mv.visitInsn(AALOAD)
@@ -348,13 +354,10 @@ case class Block(
           generateComputation(mv, c)
           mv.visitInsn(IASTORE)
         } else {
-          // a might be zero, check at runtime
           mv.visitInsn(DUP)
           val notZero = new Label()
           val done = new Label()
           mv.visitJumpInsn(IFNE, notZero)
-          // a_val == 0, call helper for array 0
-          mv.visitInsn(POP)  // pop the duplicated 0
           generateComputation(mv, b)
           generateComputation(mv, c)
           mv.visitLdcInsn(finger)
@@ -362,7 +365,6 @@ case class Block(
           mv.visitJumpInsn(GOTO, done)
           
           mv.visitLabel(notZero)
-          // a_val != 0, do direct array store
           mv.visitFieldInsn(GETSTATIC, "com/wolfskeep/MachineState", "arrays", "[[I")
           mv.visitInsn(SWAP)
           mv.visitInsn(AALOAD)
@@ -378,6 +380,7 @@ case class Block(
         generateComputation(mv, size)
         mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "allocateArray", "(I)I", false)
         mv.visitVarInsn(ALOAD, 1)
+        mv.visitInsn(SWAP)
         mv.visitIntInsn(BIPUSH, b)
         mv.visitInsn(SWAP)
         mv.visitInsn(IASTORE)
@@ -391,9 +394,9 @@ case class Block(
         mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "writeOutput", "(I)V", false)
       
       case Input(c) =>
-        // Call MachineState.readInput() and store result in register c
         mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "readInput", "()I", false)
         mv.visitVarInsn(ALOAD, 1)
+        mv.visitInsn(SWAP)
         mv.visitIntInsn(BIPUSH, c)
         mv.visitInsn(SWAP)
         mv.visitInsn(IASTORE)
@@ -471,15 +474,14 @@ case class Block(
         }
       
       case ArrayIndex(a, b, c) =>
-        // Load from MachineState.arrays[b][c]
         generateComputation(mv, b)
         mv.visitFieldInsn(GETSTATIC, "com/wolfskeep/MachineState", "arrays", "[[I")
         mv.visitInsn(SWAP)
         mv.visitInsn(AALOAD)
         generateComputation(mv, c)
         mv.visitInsn(IALOAD)
-        // Store result in register a
         mv.visitVarInsn(ALOAD, 1)
+        mv.visitInsn(SWAP)
         mv.visitIntInsn(BIPUSH, a)
         mv.visitInsn(SWAP)
         mv.visitInsn(IASTORE)
@@ -488,6 +490,7 @@ case class Block(
         generateComputation(mv, size)
         mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "allocateArray", "(I)I", false)
         mv.visitVarInsn(ALOAD, 1)
+        mv.visitInsn(SWAP)
         mv.visitIntInsn(BIPUSH, b)
         mv.visitInsn(SWAP)
         mv.visitInsn(IASTORE)
@@ -495,6 +498,7 @@ case class Block(
       case Input(c) =>
         mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "readInput", "()I", false)
         mv.visitVarInsn(ALOAD, 1)
+        mv.visitInsn(SWAP)
         mv.visitIntInsn(BIPUSH, c)
         mv.visitInsn(SWAP)
         mv.visitInsn(IASTORE)
@@ -568,10 +572,9 @@ class Analyzer(val prog: Array[Int]) {
           case 7 =>
             return Block(finger, pos, effects :+ Halt)
           case 8 =>
-            val comp = Allocation(b, regs(c))
-            regs(b) = comp
+            effects = effects :+ Allocation(b, regs(c))
+            regs(b) = RegisterAccess(b)
             touched = touched + b
-            effects = effects :+ comp
             pos += 1
           case 9 =>
             effects = effects :+ Abandonment(regs(c))
@@ -580,9 +583,9 @@ class Analyzer(val prog: Array[Int]) {
             effects = effects :+ Output(regs(c))
             pos += 1
           case 11 =>
-            regs(c) = Input(c)
-            touched = touched + c
             effects = effects :+ Input(c)
+            regs(c) = RegisterAccess(c)
+            touched = touched + c
             pos += 1
           case 12 =>
             val written = touched.map(r => r -> regs(r)).toMap

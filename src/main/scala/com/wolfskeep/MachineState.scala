@@ -16,7 +16,7 @@ object MachineState {
   
   def initialize(prog: Array[Int], in: InputStream, out: OutputStream): Unit = {
     arrays = new Array[Array[Int]](1024)
-    arrays(0) = prog.clone()
+    arrays(0) = prog
     availableArrayIds.clear()
     input = in
     output = out
@@ -89,6 +89,8 @@ object MachineState {
         throw new NoSuchElementException(s"Load program: array $srcArrayId not active")
       }
       arrays(0) = arrays(srcArrayId).clone()
+      compiledBlocks.clear()
+      analyzer = new Analyzer(arrays(0))
     }
   }
   

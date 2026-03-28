@@ -8,6 +8,11 @@ import Instruction._
 
 class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach {
   
+  override def beforeEach(): Unit = {
+    MachineState.compiledBlocks.clear()
+    MachineState.currentBlock = null
+  }
+  
   // Helper to create initial registers with RegisterAccess
   def initialRegisters: Array[Computation] = 
     (0 to 7).map(i => RegisterAccess(i): Computation).toArray
@@ -27,7 +32,7 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
       MachineState.initialize(prog, new ByteArrayInputStream(Array()), new ByteArrayOutputStream())
       MachineState.arrays should not be null
       MachineState.arrays(0) should not be null
-      MachineState.arrays(0) should equal(prog.clone())
+      MachineState.arrays(0) shouldBe theSameInstanceAs(prog)
       MachineState.nextArrayId shouldBe 1
       MachineState.availableArrayIds shouldBe empty
       MachineState.compiledBlocks shouldBe empty
@@ -129,6 +134,41 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
       an[NoSuchElementException] should be thrownBy {
         MachineState.loadProgram(1)
       }
+    }
+    
+    "clear compiled blocks and analyzer when loading from non-zero array" in {
+      val prog = Array(0)
+      MachineState.initialize(prog, new ByteArrayInputStream(Array()), new ByteArrayOutputStream())
+      
+      val fakeBlock = new CompiledBlock {
+        def start: Int = 0
+        def end: Int = 10
+        def run(registers: Array[Int]): Int = -1
+      }
+      MachineState.compiledBlocks(0) = fakeBlock
+      MachineState.compiledBlocks(5) = fakeBlock
+      
+      MachineState.arrays(1) = Array(100, 200, 300)
+      MachineState.loadProgram(1)
+      
+      MachineState.compiledBlocks shouldBe empty
+      MachineState.analyzer should not be null
+    }
+    
+    "not clear compiled blocks when loading from array 0" in {
+      val prog = Array(0)
+      MachineState.initialize(prog, new ByteArrayInputStream(Array()), new ByteArrayOutputStream())
+      
+      val fakeBlock = new CompiledBlock {
+        def start: Int = 0
+        def end: Int = 10
+        def run(registers: Array[Int]): Int = -1
+      }
+      MachineState.compiledBlocks(0) = fakeBlock
+      
+      MachineState.loadProgram(0)
+      
+      MachineState.compiledBlocks should contain key (0)
     }
     
     "amend array directly for non-zero array IDs" in {
@@ -467,6 +507,208 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
       MachineState.run(0, new Array[Int](8))
       
       MachineState.currentBlock shouldBe null
+    }
+  }
+  
+  "SelfModifyingCodeException" should {
+    "store finger value" in {
+      val ex = new SelfModifyingCodeException(42)
+      ex.finger shouldBe 42
+      ex.getMessage should include("42")
+    }
+    
+    "include finger in message" in {
+      val ex = new SelfModifyingCodeException(100)
+      ex.getMessage should include("100")
+    }
+  }
+  
+  "CompiledUniversalMachine" should {
+    "execute simple halt program" in {
+      import UMOps._
+      val prog = Array(halt)
+      val output = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), output)
+      machine.run()
+      
+      output.toByteArray shouldBe empty
+    }
+    
+    "execute orthography and halt" in {
+      import UMOps._
+      val prog = Array(A := 42, halt)
+      val output = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), output)
+      machine.run()
+      
+      output.toByteArray shouldBe empty
+    }
+    
+    "execute output instruction" in {
+      import UMOps._
+      val prog = Array(D := 65, UMOps.output(D), halt)
+      val out = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      out.toByteArray shouldBe Array(65)
+    }
+    
+    "handle self-modifying code by recompiling" in {
+      import UMOps._
+      val prog = Array(
+        A := 0,
+        B := 1,
+        C := 0x99,
+        A(B) := C,
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog.clone(), new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      out.toByteArray shouldBe empty
+    }
+    
+    "execute addition" in {
+      import UMOps._
+      val prog = Array(
+        B := 10,
+        C := 32,
+        A := B + C,
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      // Should complete without error
+    }
+    
+    "handle allocation" in {
+      import UMOps._
+      val prog = Array(
+        B := 10,
+        A := alloc(B),
+        UMOps.output(A),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      out.toByteArray shouldBe Array(1)
+    }
+    
+    "execute conditional move when condition is zero" in {
+      import UMOps._
+      val prog = Array(
+        A := 66,
+        B := 42,
+        C := 0,
+        A := B when C,
+        UMOps.output(A),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      out.toByteArray shouldBe Array(66)
+    }
+    
+    "execute conditional move when condition is non-zero" in {
+      import UMOps._
+      val prog = Array(
+        A := 66,
+        B := 42,
+        C := 1,
+        A := B when C,
+        UMOps.output(A),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      out.toByteArray shouldBe Array(42)
+    }
+    
+    "execute array operations" in {
+      import UMOps._
+      val prog = Array(
+        C := 1,
+        A := alloc(C),
+        D := 42,
+        C := 0,
+        A(C) := D,
+        C := 0,
+        B := A(C),
+        UMOps.output(B),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      out.toByteArray shouldBe Array(42)
+    }
+    
+    "execute multiplication and division" in {
+      import UMOps._
+      val prog = Array(
+        A := 6,
+        B := 7,
+        C := A * B,
+        D := C / A,
+        UMOps.output(D),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      out.toByteArray shouldBe Array(7)
+    }
+    
+    "execute NAND operation" in {
+      import UMOps._
+      val prog = Array(
+        A := 0xF0,
+        B := 0x0F,
+        C := A ^& B,
+        C := C ^& C,
+        UMOps.output(C),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      out.toByteArray shouldBe Array(0)
+    }
+    
+    "handle input" in {
+      import UMOps._
+      val prog = Array(A := UMOps.input(A), UMOps.output(A), halt)
+      val inputBytes = Array[Byte](65)
+      val out = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(inputBytes), out)
+      machine.run()
+      
+      out.toByteArray shouldBe Array(65)
     }
   }
 }

@@ -15,9 +15,9 @@ class CompiledUniversalMachine(
       val result = try {
         MachineState.run(finger, registers)
       } catch {
-        case _: SelfModifyingCodeException =>
+        case e: SelfModifyingCodeException =>
           MachineState.compiledBlocks.remove(finger)
-          MachineState.run(finger, registers)
+          e.finger
       }
       if (result == -1) return
       finger = result
