@@ -710,5 +710,153 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
       
       out.toByteArray shouldBe Array(65)
     }
+    
+    "return 0xFF on EOF" in {
+      import UMOps._
+      val prog = Array(A := UMOps.input(A), UMOps.output(A), halt)
+      val out = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      // EOF returns 0xFFFFFFFF, but output only outputs low byte
+      out.toByteArray shouldBe Array(-1)
+    }
+    
+    "output multiple values" in {
+      import UMOps._
+      val prog = Array(A := 72, UMOps.output(A), A := 101, UMOps.output(A), halt)
+      val out = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      out.toByteArray shouldBe Array(72, 101)
+    }
+    
+    "fail on output > 255" in {
+      import UMOps._
+      val prog = Array(A := 300, UMOps.output(A), halt)
+      val out = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      val thrown = the[RuntimeException] thrownBy { machine.run() }
+      thrown.getMessage should include("exceeds 255")
+    }
+    
+    "add registers modulo 2^32" in {
+      import UMOps._
+      val prog = Array(A := 100, B := 55, C := A + B, UMOps.output(C), halt)
+      val out = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      (out.toByteArray()(0) & 0xFF) shouldBe 155
+    }
+    
+    "perform NAND with overlapping bits" in {
+      import UMOps._
+      val prog = Array(A := 0x0F, B := 0x0F, C := A ^& B, C := C ^& C, UMOps.output(C), halt)
+      val out = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      (out.toByteArray()(0) & 0xFF) shouldBe 15
+    }
+    
+    "array amendment write to array" in {
+      import UMOps._
+      val prog = Array(
+        C := 1,
+        A := alloc(C),
+        D := 99,
+        C := 0,
+        A(C) := D,
+        C := 0,
+        B := A(C),
+        UMOps.output(B),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      out.toByteArray shouldBe Array(99)
+    }
+    
+    "array amendment modify array 0" in {
+      import UMOps._
+      val prog = Array(
+        A := 0,
+        B := 65,
+        A(A) := B,
+        C := A(A),
+        UMOps.output(C),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog.clone(), new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      out.toByteArray shouldBe Array(65)
+    }
+    
+    "reuse freed array IDs" in {
+      import UMOps._
+      val prog = Array(
+        B := 10,
+        A := alloc(B),
+        abandon(A),
+        D := 10,
+        A := alloc(D),
+        UMOps.output(A),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      out.toByteArray shouldBe Array(1)
+    }
+    
+    "abandon array throws on null access" in {
+      import UMOps._
+      val prog = Array(
+        C := 1,
+        A := alloc(C),
+        abandon(A),
+        C := 0,
+        B := A(C),
+        halt
+      )
+      val out = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      a[RuntimeException] should be thrownBy { machine.run() }
+    }
+    
+    "fail to abandon array 0" in {
+      import UMOps._
+      val prog = Array(abandon(A), halt)
+      val out = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      val thrown = the[RuntimeException] thrownBy { machine.run() }
+      thrown.getMessage should include("cannot abandon array 0")
+    }
+    
+    "division by zero fails" in {
+      import UMOps._
+      val prog = Array(B := 0, A := A / B, halt)
+      val out = new ByteArrayOutputStream()
+      
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      an[ArithmeticException] should be thrownBy { machine.run() }
+    }
   }
 }
