@@ -225,7 +225,7 @@ case class Block(
     import org.objectweb.asm.{ClassWriter, MethodVisitor, Label}
     import org.objectweb.asm.Opcodes._
     
-    val className = s"CompiledBlock_$start _$end"
+    val className = s"CompiledBlock_${start}_${end}"
     val cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS)
     
     cw.visit(V1_8, ACC_PUBLIC, className, null, "java/lang/Object", Array("com/wolfskeep/CompiledBlock"))
@@ -246,6 +246,24 @@ case class Block(
     mv.visitLdcInsn(end)
     mv.visitFieldInsn(PUTFIELD, className, "end", "I")
     mv.visitInsn(RETURN)
+    mv.visitMaxs(0, 0)
+    mv.visitEnd()
+    
+    // start() getter method
+    mv = cw.visitMethod(ACC_PUBLIC, "start", "()I", null, null)
+    mv.visitCode()
+    mv.visitVarInsn(ALOAD, 0)
+    mv.visitFieldInsn(GETFIELD, className, "start", "I")
+    mv.visitInsn(IRETURN)
+    mv.visitMaxs(0, 0)
+    mv.visitEnd()
+    
+    // end() getter method
+    mv = cw.visitMethod(ACC_PUBLIC, "end", "()I", null, null)
+    mv.visitCode()
+    mv.visitVarInsn(ALOAD, 0)
+    mv.visitFieldInsn(GETFIELD, className, "end", "I")
+    mv.visitInsn(IRETURN)
     mv.visitMaxs(0, 0)
     mv.visitEnd()
     
@@ -317,12 +335,43 @@ case class Block(
         mv.visitInsn(IASTORE)
       
       case ArrayAmendment(a, b, c, finger) =>
-        // Call MachineState.amendArray(a_value, b_value, c_value, finger)
+        // Optimize: only call helper if amending array 0
+        // arrays[a][b] = c
         generateComputation(mv, a)
-        generateComputation(mv, b)
-        generateComputation(mv, c)
-        mv.visitLdcInsn(finger)
-        mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "amendArray", "(IIII)V", false)
+        
+        if (a.knownValues.exists(_.notZero)) {
+          // a is known to be non-zero, do direct array store
+          mv.visitFieldInsn(GETSTATIC, "com/wolfskeep/MachineState", "arrays", "[[I")
+          mv.visitInsn(SWAP)
+          mv.visitInsn(AALOAD)
+          generateComputation(mv, b)
+          generateComputation(mv, c)
+          mv.visitInsn(IASTORE)
+        } else {
+          // a might be zero, check at runtime
+          mv.visitInsn(DUP)
+          val notZero = new Label()
+          val done = new Label()
+          mv.visitJumpInsn(IFNE, notZero)
+          // a_val == 0, call helper for array 0
+          mv.visitInsn(POP)  // pop the duplicated 0
+          generateComputation(mv, b)
+          generateComputation(mv, c)
+          mv.visitLdcInsn(finger)
+          mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "amendArray", "(IIII)V", false)
+          mv.visitJumpInsn(GOTO, done)
+          
+          mv.visitLabel(notZero)
+          // a_val != 0, do direct array store
+          mv.visitFieldInsn(GETSTATIC, "com/wolfskeep/MachineState", "arrays", "[[I")
+          mv.visitInsn(SWAP)
+          mv.visitInsn(AALOAD)
+          generateComputation(mv, b)
+          generateComputation(mv, c)
+          mv.visitInsn(IASTORE)
+          
+          mv.visitLabel(done)
+        }
       
       case Allocation(b, size) =>
         // Call MachineState.allocateArray(size) and store result in register b
