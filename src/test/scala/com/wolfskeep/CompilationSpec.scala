@@ -523,6 +523,77 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
     }
   }
   
+"Jump optimization" should {
+    "create Jump instead of LoadProgram when b is known zero" in {
+      // Program: A := 0; jump(arrays(A)(finger))
+      // Since A is known to be 0, this should create Jump instead of LoadProgram
+      val prog = Array[Int](
+        0xD0000000,  // Orthography: reg0 = 0
+        0xC0000000   // LoadProgram with b=0, c=0 (jump to arrays[0][0])
+      )
+      
+      val analyzer = new Analyzer(prog)
+      val regs = initialRegisters
+      regs(0) = Orthography(0)  // After first instruction, reg0 = 0
+      
+      val block = analyzer.from(1, regs)  // Start from second instruction
+      block.effects.head shouldBe a[Jump]
+    }
+    
+    "create LoadProgram when b is not known to be zero" in {
+      // Program: jump(arrays(B)(finger)) where B is read from input (unknown)
+      val prog = Array[Int](
+        0x0B000000,  // Input: reg0 = input (unknown value)
+        0xC0000000   // LoadProgram with b=0, c=0
+      )
+      
+      val analyzer = new Analyzer(prog)
+      val regs = initialRegisters
+      regs(0) = Input(0)  // After input, reg0 is unknown
+      
+      val block = analyzer.from(1, regs)  // Start from second instruction
+      block.effects.head shouldBe a[LoadProgram]
+    }
+    
+    "create LoadProgram when b is known non-zero" in {
+      // Program: A := 5; jump(arrays(A)(finger))
+      // Since A is known to be 5 (not zero), this should create LoadProgram
+      val prog = Array[Int](
+        0xD0000005,  // Orthography: reg0 = 5
+        0xC0000000   // LoadProgram with b=0, c=0
+      )
+      
+      val analyzer = new Analyzer(prog)
+      val regs = initialRegisters
+      regs(0) = Orthography(5)  // After first instruction, reg0 = 5
+      
+      val block = analyzer.from(1, regs)
+      block.effects.head shouldBe a[LoadProgram]
+    }
+    
+    "execute jump within program using loadProgram with b=0" in {
+      import UMOps._
+      // Use jump(A(C)) where A=0 (jump within current program)
+      // This creates a loop that runs until it halts
+      val prog = Array(
+        B := 0,          // 0: B = 0 (array ID = 0 means current program)
+        C := 7,          // 1: C = 7 (will jump to halt instruction)
+        D := 65,         // 2: D = 'A'
+        UMOps.output(D), // 3: output 'A'
+        halt,            // 4: halt
+        halt,            // 5: halt (unused)
+        halt,            // 6: halt (unused)
+        halt             // 7: halt (jump target)
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+out.toByteArray shouldBe Array(65)  // Should output 'A' then halt
+    }
+  }
+  
   "CompiledUniversalMachine" should {
     "execute simple halt program" in {
       import UMOps._

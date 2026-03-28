@@ -204,6 +204,7 @@ case class ConditionalMove(a: Computation, b: Computation, c: Computation) exten
     c: Computation,
     written: Map[Int, Computation]
   ) extends Effect
+  case class Jump(c: Computation, written: Map[Int, Computation]) extends Effect
   case class Orthography(v: Int) extends Computation {
     def knownValues = Some(PossibleValuesSet(Set(v)))
   }
@@ -332,6 +333,19 @@ case class Block(
         generateComputation(mv, b)
         mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "loadProgram", "(I)V", false)
         // Return c value
+        generateComputation(mv, c)
+        mv.visitInsn(IRETURN)
+      
+      case Jump(c, written) =>
+        // Store written values to registers
+        for ((reg, comp) <- written) {
+          generateComputation(mv, comp)
+          mv.visitVarInsn(ALOAD, 1)
+          mv.visitIntInsn(BIPUSH, reg)
+          mv.visitInsn(SWAP)
+          mv.visitInsn(IASTORE)
+        }
+        // Return c value (no need to call loadProgram since b is known zero)
         generateComputation(mv, c)
         mv.visitInsn(IRETURN)
       
@@ -599,7 +613,12 @@ class Analyzer(val prog: Array[Int]) {
             pos += 1
           case 12 =>
             val written = touched.map(r => r -> regs(r)).toMap
-            return Block(finger, pos, effects :+ LoadProgram(regs(b), regs(c), written))
+            if (regs(b).knownValues.exists(_.isZero)) {
+              // b is known to be zero - just jump, don't load program
+              return Block(finger, pos, effects :+ Jump(regs(c), written))
+            } else {
+              return Block(finger, pos, effects :+ LoadProgram(regs(b), regs(c), written))
+            }
         }
       }
     }
