@@ -1,6 +1,8 @@
 package com.wolfskeep
 
 import scala.collection.immutable.SortedMap
+import org.objectweb.asm.{ClassWriter, MethodVisitor, Opcodes}
+import org.objectweb.asm.Opcodes._
 import Instruction._
 
 sealed trait PossibleValues {
@@ -172,10 +174,10 @@ object Instruction {
 case class ConditionalMove(a: Computation, b: Computation, c: Computation) extends Computation {
     lazy val knownValues = if (c.knownValues.isZero) a.knownValues else if (c.knownValues.notZero) b.knownValues else a.knownValues.union(b.knownValues)
   }
-  case class ArrayIndex(b: Computation, c: Computation) extends Computation with Effect {
+  case class ArrayIndex(a: Int, b: Computation, c: Computation) extends Computation with Effect {
     def knownValues = None
   }
-  case class ArrayAmendment(a: Computation, b: Computation, c: Computation) extends Effect
+  case class ArrayAmendment(a: Computation, b: Computation, c: Computation, finger: Int) extends Effect
   case class Addition(b: Computation, c: Computation) extends Computation {
     lazy val knownValues = b.knownValues + c.knownValues
   }
@@ -189,12 +191,12 @@ case class ConditionalMove(a: Computation, b: Computation, c: Computation) exten
     lazy val knownValues = b.knownValues ^& c.knownValues
   }
   case object Halt extends Effect
-  case class Allocation(size: Computation) extends Computation with Effect {
+  case class Allocation(b: Int, size: Computation) extends Computation with Effect {
     val knownValues = Some(PossibleValuesRange(1 to Int.MaxValue))
   }
   case class Abandonment(c: Computation) extends Effect
   case class Output(c: Computation) extends Effect
-  case object Input extends Computation with Effect {
+  case class Input(c: Int) extends Computation with Effect {
     val knownValues = Some(PossibleValuesRange(-1 to 255))
   }
   case class LoadProgram(
@@ -214,9 +216,246 @@ case class Block(
   start: Int,
   end: Int,
   effects: List[Effect]
-)
+) {
+  private var compiledBlock: CompiledBlock = _
+  
+  def compile(): CompiledBlock = synchronized {
+    if (compiledBlock != null) return compiledBlock
+    
+    import org.objectweb.asm.{ClassWriter, MethodVisitor, Label}
+    import org.objectweb.asm.Opcodes._
+    
+    val className = s"CompiledBlock_$start _$end"
+    val cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS)
+    
+    cw.visit(V1_8, ACC_PUBLIC, className, null, "java/lang/Object", Array("com/wolfskeep/CompiledBlock"))
+    
+    // Add fields for start and end
+    cw.visitField(ACC_PUBLIC, "start", "I", null, null).visitEnd()
+    cw.visitField(ACC_PUBLIC, "end", "I", null, null).visitEnd()
+    
+    // Constructor
+    var mv = cw.visitMethod(ACC_PUBLIC, "<init>", "()V", null, null)
+    mv.visitCode()
+    mv.visitVarInsn(ALOAD, 0)
+    mv.visitMethodInsn(INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
+    mv.visitVarInsn(ALOAD, 0)
+    mv.visitLdcInsn(start)
+    mv.visitFieldInsn(PUTFIELD, className, "start", "I")
+    mv.visitVarInsn(ALOAD, 0)
+    mv.visitLdcInsn(end)
+    mv.visitFieldInsn(PUTFIELD, className, "end", "I")
+    mv.visitInsn(RETURN)
+    mv.visitMaxs(0, 0)
+    mv.visitEnd()
+    
+    // run method
+    mv = cw.visitMethod(ACC_PUBLIC, "run", "([I)I", null, null)
+    mv.visitCode()
+    
+    // Generate bytecode for each effect
+    for (effect <- effects) {
+      generateEffect(mv, effect, className)
+    }
+    
+    // If we reach here without returning, return -1 (shouldn't happen for valid blocks)
+    mv.visitInsn(ICONST_M1)
+    mv.visitInsn(IRETURN)
+    mv.visitMaxs(0, 0)
+    mv.visitEnd()
+    
+    cw.visitEnd()
+    
+    val bytes = cw.toByteArray()
+    val loader = new ClassLoader() {
+      def loadClass(name: String, b: Array[Byte]): Class[_] = {
+        defineClass(null, b, 0, b.length)
+      }
+    }
+    val clazz = loader.loadClass(className, bytes)
+    compiledBlock = clazz.newInstance().asInstanceOf[CompiledBlock]
+    compiledBlock
+  }
+  
+  private def generateEffect(mv: MethodVisitor, effect: Effect, className: String): Unit = {
+    import org.objectweb.asm.Label
+    import org.objectweb.asm.Opcodes._
+    
+    effect match {
+      case Halt =>
+        mv.visitInsn(ICONST_M1)
+        mv.visitInsn(IRETURN)
+      
+      case LoadProgram(b, c, written) =>
+        // Store written values to registers
+        for ((reg, comp) <- written) {
+          generateComputation(mv, comp)
+          mv.visitVarInsn(ALOAD, 1)
+          mv.visitIntInsn(BIPUSH, reg)
+          mv.visitInsn(SWAP)
+          mv.visitInsn(IASTORE)
+        }
+        // Call MachineState.loadProgram(b_value)
+        generateComputation(mv, b)
+        mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "loadProgram", "(I)V", false)
+        // Return c value
+        generateComputation(mv, c)
+        mv.visitInsn(IRETURN)
+      
+      case ArrayIndex(a, b, c) =>
+        // Load from MachineState.arrays[b][c] and store in register a
+        generateComputation(mv, b)
+        mv.visitFieldInsn(GETSTATIC, "com/wolfskeep/MachineState", "arrays", "[[I")
+        mv.visitInsn(SWAP)
+        mv.visitInsn(AALOAD)
+        generateComputation(mv, c)
+        mv.visitInsn(IALOAD)
+        // Store result in register a
+        mv.visitVarInsn(ALOAD, 1)
+        mv.visitIntInsn(BIPUSH, a)
+        mv.visitInsn(SWAP)
+        mv.visitInsn(IASTORE)
+      
+      case ArrayAmendment(a, b, c, finger) =>
+        // Call MachineState.amendArray(a_value, b_value, c_value, finger)
+        generateComputation(mv, a)
+        generateComputation(mv, b)
+        generateComputation(mv, c)
+        mv.visitLdcInsn(finger)
+        mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "amendArray", "(IIII)V", false)
+      
+      case Allocation(b, size) =>
+        // Call MachineState.allocateArray(size) and store result in register b
+        generateComputation(mv, size)
+        mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "allocateArray", "(I)I", false)
+        mv.visitVarInsn(ALOAD, 1)
+        mv.visitIntInsn(BIPUSH, b)
+        mv.visitInsn(SWAP)
+        mv.visitInsn(IASTORE)
+      
+      case Abandonment(c) =>
+        generateComputation(mv, c)
+        mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "abandonArray", "(I)V", false)
+      
+      case Output(c) =>
+        generateComputation(mv, c)
+        mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "writeOutput", "(I)V", false)
+      
+      case Input(c) =>
+        // Call MachineState.readInput() and store result in register c
+        mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "readInput", "()I", false)
+        mv.visitVarInsn(ALOAD, 1)
+        mv.visitIntInsn(BIPUSH, c)
+        mv.visitInsn(SWAP)
+        mv.visitInsn(IASTORE)
+    }
+  }
+  
+  private def generateComputation(mv: MethodVisitor, comp: Computation): Unit = {
+    import org.objectweb.asm.Label
+    import org.objectweb.asm.Opcodes._
+    
+    comp match {
+      case Orthography(v) =>
+        mv.visitLdcInsn(v)
+      
+      case RegisterAccess(r) =>
+        // Load registers[r]
+        mv.visitVarInsn(ALOAD, 1)
+        mv.visitIntInsn(BIPUSH, r)
+        mv.visitInsn(IALOAD)
+      
+      case Addition(b, c) =>
+        generateComputation(mv, b)
+        generateComputation(mv, c)
+        mv.visitInsn(IADD)
+      
+      case Multiplication(b, c) =>
+        // Unsigned multiplication
+        generateComputation(mv, b)
+        mv.visitInsn(I2L)
+        mv.visitLdcInsn(0xFFFFFFFFL)
+        mv.visitInsn(LAND)
+        generateComputation(mv, c)
+        mv.visitInsn(I2L)
+        mv.visitLdcInsn(0xFFFFFFFFL)
+        mv.visitInsn(LAND)
+        mv.visitInsn(LMUL)
+        mv.visitInsn(L2I)
+      
+      case Division(b, c) =>
+        // Unsigned division
+        generateComputation(mv, b)
+        mv.visitInsn(I2L)
+        mv.visitLdcInsn(0xFFFFFFFFL)
+        mv.visitInsn(LAND)
+        generateComputation(mv, c)
+        mv.visitInsn(I2L)
+        mv.visitLdcInsn(0xFFFFFFFFL)
+        mv.visitInsn(LAND)
+        mv.visitInsn(LDIV)
+        mv.visitInsn(L2I)
+      
+      case Nand(b, c) =>
+        generateComputation(mv, b)
+        generateComputation(mv, c)
+        mv.visitInsn(IAND)
+        mv.visitInsn(ICONST_M1)
+        mv.visitInsn(IXOR)
+      
+      case ConditionalMove(a, b, c) =>
+        // Optimize based on knownValues
+        if (c.knownValues.exists(_.isZero)) {
+          generateComputation(mv, a)
+        } else if (c.knownValues.exists(_.notZero)) {
+          generateComputation(mv, b)
+        } else {
+          val useA = new Label()
+          val done = new Label()
+          generateComputation(mv, c)
+          mv.visitJumpInsn(IFEQ, useA)
+          generateComputation(mv, b)
+          mv.visitJumpInsn(GOTO, done)
+          mv.visitLabel(useA)
+          generateComputation(mv, a)
+          mv.visitLabel(done)
+        }
+      
+      case ArrayIndex(a, b, c) =>
+        // Load from MachineState.arrays[b][c]
+        generateComputation(mv, b)
+        mv.visitFieldInsn(GETSTATIC, "com/wolfskeep/MachineState", "arrays", "[[I")
+        mv.visitInsn(SWAP)
+        mv.visitInsn(AALOAD)
+        generateComputation(mv, c)
+        mv.visitInsn(IALOAD)
+        // Store result in register a
+        mv.visitVarInsn(ALOAD, 1)
+        mv.visitIntInsn(BIPUSH, a)
+        mv.visitInsn(SWAP)
+        mv.visitInsn(IASTORE)
+      
+      case Allocation(b, size) =>
+        generateComputation(mv, size)
+        mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "allocateArray", "(I)I", false)
+        mv.visitVarInsn(ALOAD, 1)
+        mv.visitIntInsn(BIPUSH, b)
+        mv.visitInsn(SWAP)
+        mv.visitInsn(IASTORE)
+      
+      case Input(c) =>
+        mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "readInput", "()I", false)
+        mv.visitVarInsn(ALOAD, 1)
+        mv.visitIntInsn(BIPUSH, c)
+        mv.visitInsn(SWAP)
+        mv.visitInsn(IASTORE)
+    }
+  }
+}
 
 trait CompiledBlock {
+  def start: Int
+  def end: Int
   def run(registers: Array[Int]): Int
 }
 
@@ -254,12 +493,12 @@ class Analyzer(val prog: Array[Int]) {
             touched = touched + a
             pos += 1
           case 1 =>
-            effects = effects :+ ArrayIndex(regs(b), regs(c))
+            effects = effects :+ ArrayIndex(a, regs(b), regs(c))
             regs(a) = RegisterAccess(a)
             touched = touched + a
             pos += 1
           case 2 =>
-            effects = effects :+ ArrayAmendment(regs(a), regs(b), regs(c))
+            effects = effects :+ ArrayAmendment(regs(a), regs(b), regs(c), pos + 1)
             pos += 1
           case 3 =>
             regs(a) = Addition(regs(b), regs(c))
@@ -280,7 +519,7 @@ class Analyzer(val prog: Array[Int]) {
           case 7 =>
             return Block(finger, pos, effects :+ Halt)
           case 8 =>
-            val comp = Allocation(regs(c))
+            val comp = Allocation(b, regs(c))
             regs(b) = comp
             touched = touched + b
             effects = effects :+ comp
@@ -292,9 +531,9 @@ class Analyzer(val prog: Array[Int]) {
             effects = effects :+ Output(regs(c))
             pos += 1
           case 11 =>
-            regs(c) = Input
+            regs(c) = Input(c)
             touched = touched + c
-            effects = effects :+ Input
+            effects = effects :+ Input(c)
             pos += 1
           case 12 =>
             val written = touched.map(r => r -> regs(r)).toMap

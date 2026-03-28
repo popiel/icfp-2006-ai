@@ -301,7 +301,7 @@ class InstructionSpec extends AnyWordSpec with Matchers {
       val a = Orthography(0)
       val b = Orthography(0)
       val c = Orthography(0)
-      ArrayAmendment(a, b, c) shouldBe an[Effect]
+      ArrayAmendment(a, b, c, 0) shouldBe an[Effect]
     }
   }
 
@@ -322,7 +322,7 @@ class InstructionSpec extends AnyWordSpec with Matchers {
 
     "return union when c may be zero" in {
       val b = Orthography(42)
-      val c = Input
+      val c = Input(0)
       val a = Orthography(99)
       ConditionalMove(a, b, c).knownValues shouldBe Some(PossibleValuesSet(Set(42, 99)))
     }
@@ -332,7 +332,7 @@ class InstructionSpec extends AnyWordSpec with Matchers {
     "always return None for knownValues" in {
       val b = Orthography(1)
       val c = Orthography(2)
-      ArrayIndex(b, c).knownValues shouldBe None
+      ArrayIndex(0, b, c).knownValues shouldBe None
     }
   }
 
@@ -344,7 +344,7 @@ class InstructionSpec extends AnyWordSpec with Matchers {
     }
 
     "return None when either operand is None" in {
-      val b = ArrayIndex(Orthography(1), Orthography(2))
+      val b = ArrayIndex(0, Orthography(1), Orthography(2))
       val c = Orthography(1)
       Addition(b, c).knownValues shouldBe None
     }
@@ -377,13 +377,13 @@ class InstructionSpec extends AnyWordSpec with Matchers {
   "Allocation" should {
     "return Range(1 to Int.MaxValue)" in {
       val size = Orthography(10)
-      Allocation(size).knownValues shouldBe Some(PossibleValuesRange(1 to Int.MaxValue))
+      Allocation(0, size).knownValues shouldBe Some(PossibleValuesRange(1 to Int.MaxValue))
     }
   }
 
   "Input" should {
     "return Range(-1 to 255)" in {
-      Input.knownValues shouldBe Some(PossibleValuesRange(-1 to 255))
+      Input(0).knownValues shouldBe Some(PossibleValuesRange(-1 to 255))
     }
   }
 

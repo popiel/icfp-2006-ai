@@ -30,4 +30,7 @@ libraryDependencies ++= Seq(
   "org.scalatest" %% "scalatest" % "3.2.15" % Test,
 
   // HTML parsing
-  "org.jsoup" % "jsoup" % "1.17.2")
+  "org.jsoup" % "jsoup" % "1.17.2",
+
+  // ASM for bytecode generation
+  "org.ow2.asm" % "asm" % "9.6")
