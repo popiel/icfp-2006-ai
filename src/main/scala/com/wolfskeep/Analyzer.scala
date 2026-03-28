@@ -212,6 +212,15 @@ case class ConditionalMove(a: Computation, b: Computation, c: Computation) exten
   }
 }
 
+object Block {
+  private var seqNum = 0
+  def nextSeqNum(): Int = synchronized {
+    val n = seqNum
+    seqNum += 1
+    n
+  }
+}
+
 case class Block(
   start: Int,
   end: Int,
@@ -225,7 +234,8 @@ case class Block(
     import org.objectweb.asm.{ClassWriter, MethodVisitor, Label}
     import org.objectweb.asm.Opcodes._
     
-    val className = s"CompiledBlock_${start}_${end}"
+    val seqNum = Block.nextSeqNum()
+    val className = s"CompiledBlock_${start}_${end}_$seqNum"
     val cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS)
     
     cw.visit(V1_8, ACC_PUBLIC, className, null, "java/lang/Object", Array("com/wolfskeep/CompiledBlock"))
