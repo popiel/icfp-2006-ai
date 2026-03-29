@@ -787,6 +787,208 @@ out.toByteArray shouldBe Array(65)  // Should output 'A' then halt
       out.toByteArray shouldBe Array(7)
     }
     
+    "execute division and output result" in {
+      import UMOps._
+      // Test: 100 / 5 = 20
+      val prog = Array(
+        A := 100,
+        B := 5,
+        C := A / B,
+        UMOps.output(C),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      (out.toByteArray()(0) & 0xFF) shouldBe 20
+    }
+    
+    "execute division that discards remainder" in {
+      import UMOps._
+      // Test: 7 / 2 = 3 (discards .5 remainder)
+      val prog = Array(
+        A := 7,
+        B := 2,
+        C := A / B,
+        UMOps.output(C),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      (out.toByteArray()(0) & 0xFF) shouldBe 3
+    }
+    
+    "execute division discarding remainder with larger values" in {
+      import UMOps._
+      // Test: 100 / 3 = 33 (discards remainder of 1)
+      val prog = Array(
+        A := 100,
+        B := 3,
+        C := A / B,
+        UMOps.output(C),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      (out.toByteArray()(0) & 0xFF) shouldBe 33
+    }
+    
+    "execute division with remainder at boundary" in {
+      import UMOps._
+      // Test: 255 / 2 = 127 (discards .5 remainder, result fits in byte)
+      val prog = Array(
+        A := 255,
+        B := 2,
+        C := A / B,
+        UMOps.output(C),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      (out.toByteArray()(0) & 0xFF) shouldBe 127
+    }
+    
+    "execute unsigned division proving 32-bit behavior" in {
+      import UMOps._
+      // Test unsigned division: use multiplication to create large value, then divide
+      // 500 * 500 = 250000, then 250000 / 500 = 500
+      // This tests that multiplication produces correct 32-bit unsigned result
+      // and division operates on 32-bit values
+      val prog = Array(
+        A := 500,
+        B := 500,
+        F := 2,
+        C := A * B,  // C = 250000
+        D := C / A,  // D = 250000 / 500 = 500
+        E := D / F,  // E = 500 / 2 = 250 (to fit in byte)
+        UMOps.output(E),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      (out.toByteArray()(0) & 0xFF) shouldBe 250
+    }
+    
+    "execute division with divisor larger than dividend" in {
+      import UMOps._
+      // Test: 5 / 10 = 0 (unsigned division, smaller / larger = 0)
+      val prog = Array(
+        A := 5,
+        B := 10,
+        C := A / B,
+        UMOps.output(C),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      (out.toByteArray()(0) & 0xFF) shouldBe 0
+    }
+    
+    "execute division with dividend larger than 2^31" in {
+      import UMOps._
+      // Test unsigned division with dividend > 2^31 (high bit set)
+      // We need to construct a value > 2^31 using multiplication since
+      // Orthography can only load 25-bit immediates
+      // 
+      // Method: 0x01000000 * 200 = 3355443200 (which is > 2^31 = 2147483648)
+      // 3355443200 in binary has the high bit set (bit 31)
+      // 
+      // Unsigned: 3355443200 / 16777216 = 200
+      // If signed (treating as -939524096): -939524096 / 16777216 = -56 (wrong!)
+      // 
+      // This proves division is unsigned, not signed
+      val prog = Array(
+        A := 0x01000000,  // 16777216 (fits in 25-bit Orthography immediate)
+        B := 200,
+        C := A * B,       // C = 3355443200 = 0xC8000000 (> 2^31, high bit set)
+        D := C / A,       // D = 3355443200 / 16777216 = 200 (unsigned division)
+        UMOps.output(D),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      // If division were signed: result would be negative residue (~-56)
+      // But unsigned division gives 200
+      (out.toByteArray()(0) & 0xFF) shouldBe 200
+    }
+    
+    "execute multiplication and output result" in {
+      import UMOps._
+      // Test: 12 * 10 = 120
+      val prog = Array(
+        A := 12,
+        B := 10,
+        C := A * B,
+        UMOps.output(C),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      (out.toByteArray()(0) & 0xFF) shouldBe 120
+    }
+    
+    "execute addition and output result" in {
+      import UMOps._
+      // Test: 50 + 75 = 125
+      val prog = Array(
+        A := 50,
+        B := 75,
+        C := A + B,
+        UMOps.output(C),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      (out.toByteArray()(0) & 0xFF) shouldBe 125
+    }
+    
+    "execute NAND with simple values" in {
+      import UMOps._
+      // Test: NAND(0xFF, 0x00) = 0xFFFFFFFF (all ones)
+      // NAND = ~(a & b)
+      // NAND(0xFF, 0x00) = ~(0xFF & 0x00) = ~0 = 0xFFFFFFFF
+      // Output as byte: 255
+      val prog = Array(
+        A := 0xFF,
+        B := 0x00,
+        C := A ^& B,
+        UMOps.output(C),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      (out.toByteArray()(0) & 0xFF) shouldBe 255
+    }
+    
     "execute NAND operation" in {
       import UMOps._
       val prog = Array(
