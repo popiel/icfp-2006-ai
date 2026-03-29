@@ -560,8 +560,15 @@ case class Block(
       
       case Division(b, c) =>
         generateComputation(mv, b)
+        mv.visitInsn(I2L)
+        mv.visitLdcInsn(java.lang.Long.valueOf(0xFFFFFFFFL))
+        mv.visitInsn(LAND)
         generateComputation(mv, c)
-        mv.visitInsn(IDIV)
+        mv.visitInsn(I2L)
+        mv.visitLdcInsn(java.lang.Long.valueOf(0xFFFFFFFFL))
+        mv.visitInsn(LAND)
+        mv.visitInsn(LDIV)
+        mv.visitInsn(L2I)
       
       case Nand(b, c) =>
         generateComputation(mv, b)

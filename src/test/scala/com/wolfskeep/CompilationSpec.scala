@@ -1166,5 +1166,30 @@ out.toByteArray shouldBe Array(65)  // Should output 'A' then halt
       val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
       an[ArithmeticException] should be thrownBy { machine.run() }
     }
+    
+    "division by -1 (all ones) outputs 0" in {
+      import UMOps._
+      // A := 1
+      // B := 0
+      // B := B ^& B  (B = ~0 = -1 = 0xFFFFFFFF)
+      // C := A / B   (1 / 0xFFFFFFFF = 0 in unsigned division)
+      // output C
+      // halt
+      val prog = Array(
+        A := 1,
+        B := 0,
+        B := B ^& B,   // B = ~0 = -1
+        C := A / B,
+        output(C),
+        halt
+      )
+      
+      val out = new ByteArrayOutputStream()
+      val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
+      machine.run()
+      
+      // 1 / 0xFFFFFFFF = 0 (unsigned: 1 / 4294967295 = 0)
+      (out.toByteArray()(0) & 0xFF) shouldBe 0
+    }
   }
 }

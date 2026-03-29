@@ -2,9 +2,18 @@ package com.wolfskeep
 
 import scala.collection.mutable.{Queue, Set => MSet}
 
-sealed trait RegisterState
-case class Known(value: Int) extends RegisterState
-case object Unknown extends RegisterState
+sealed trait RegisterState {
+  def knownValues: Option[Set[Int]]
+}
+case class Known(value: Int) extends RegisterState {
+  def knownValues: Option[Set[Int]] = Some(Set(value))
+}
+case class KnownValues(values: Set[Int]) extends RegisterState {
+  def knownValues: Option[Set[Int]] = Some(values)
+}
+case object Unknown extends RegisterState {
+  def knownValues: Option[Set[Int]] = None
+}
 
 object UMDecoder {
   def main(args: Array[String]): Unit = {
@@ -51,22 +60,17 @@ class UMDecoder(program: Array[Int]) {
       } else if (op == 12) {
         val b = (instr >>> 3) & 7
         val c = instr & 7
-        val bKnown = regs(b) match {
-          case Known(v) => v == 0
-          case Unknown => false
-        }
-        val cKnown = regs(c) match {
-          case Known(v) => Some(v)
-          case Unknown => None
-        }
+        val bIsZero = regs(b).knownValues.exists(_ == Set(0))
+        val cValues = regs(c).knownValues
 
         visited.add(finger)
         spanEnd = finger + 1
 
-        if (bKnown && cKnown.isDefined) {
-          val jumpTarget = cKnown.get
-          if (jumpTarget >= 0 && jumpTarget < program.length && !visited.contains(jumpTarget)) {
-            worklist.enqueue((jumpTarget, regs.clone()))
+        if (bIsZero && cValues.isDefined) {
+          for (jumpTarget <- cValues.get) {
+            if (jumpTarget >= 0 && jumpTarget < program.length && !visited.contains(jumpTarget)) {
+              worklist.enqueue((jumpTarget, regs.clone()))
+            }
           }
         }
         halted = true
@@ -78,9 +82,13 @@ class UMDecoder(program: Array[Int]) {
       }
     }
 
+    var currentRegs = regs.clone()
     println(s"SPAN $spanStart to $spanEnd:")
     for (i <- spanStart until spanEnd) {
-      println(decodeInstruction(program(i), regs))
+      println(decodeInstruction(program(i), currentRegs))
+      if (i < spanEnd - 1) {
+        updateRegisters(program(i), (program(i) >>> 28) & 0xF, currentRegs)
+      }
     }
     println()
   }
@@ -89,26 +97,52 @@ class UMDecoder(program: Array[Int]) {
     if (op == 13) {
       val d = (instr >>> 25) & 7
       val v = instr & 0x01FFFFFF
-      // Convert to signed 32-bit
       val signedV = if (v >= 0x01000000) v - 0x02000000 else v
       regs(d) = Known(signedV)
     } else if (op == 0) {
       val a = (instr >>> 6) & 7
+      val b = (instr >>> 3) & 7
       val c = instr & 7
-      regs(c) match {
-        case Known(0) => // a unchanged
-        case _ => regs(a) = Unknown
+      val cValues = regs(c).knownValues
+      val aValues = regs(a).knownValues
+      val bValues = regs(b).knownValues
+      
+      if (cValues.isDefined && cValues.get == Set(0)) {
+        // c is known to be 0, so a unchanged
+      } else if (cValues.isDefined && !cValues.contains(0)) {
+        // c is known to be non-zero, so a = b
+        if (bValues.isDefined) {
+          regs(a) = if (bValues.get.size == 1) Known(bValues.get.head) else KnownValues(bValues.get)
+        } else {
+          regs(a) = Unknown
+        }
+      } else {
+        // c is unknown or has mixed 0/non-zero values
+        // a can be either unchanged or equal to b
+        val possibleValues = scala.collection.mutable.Set[Int]()
+        if (aValues.isDefined) possibleValues ++= aValues.get
+        if (bValues.isDefined) possibleValues ++= bValues.get
+        
+        if (possibleValues.isEmpty) {
+          regs(a) = Unknown
+        } else if (possibleValues.size == 1) {
+          regs(a) = Known(possibleValues.head)
+        } else {
+          regs(a) = KnownValues(possibleValues.toSet)
+        }
       }
     } else if (op >= 1 && op <= 6) {
       val a = (instr >>> 6) & 7
-      if (op != 2) { // ArrayUpdate doesn't write to register
+      if (op != 2) {
         regs(a) = Unknown
       }
     } else if (op == 8) {
       val b = (instr >>> 3) & 7
       regs(b) = Unknown
+    } else if (op == 11) {
+      val c = instr & 7
+      regs(c) = Unknown
     }
-    // ops 9, 10, 11 don't write to registers
   }
 
   private def decodeInstruction(instr: Int, regs: Array[RegisterState]): String = {
@@ -165,7 +199,19 @@ class UMDecoder(program: Array[Int]) {
       s"abandon ${regName(c)}"
     } else if (op == 10) {
       val c = instr & 7
-      s"output ${regName(c)}"
+      val cVal = regs(c).knownValues.flatMap(_.headOption)// Get single value if known
+      cVal match {
+        case Some(v) =>
+          val numStr = f"$v%3d"
+          if (v >= 33 && v <= 126) {
+            val ch = v.toChar
+            s"output ${regName(c)} $numStr '$ch'"
+          } else {
+            s"output ${regName(c)} $numStr"
+          }
+        case None =>
+          s"output ${regName(c)}"
+      }
     } else if (op == 11) {
       val c = instr & 7
       s"input ${regName(c)}"
