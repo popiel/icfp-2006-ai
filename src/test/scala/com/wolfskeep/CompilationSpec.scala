@@ -715,6 +715,39 @@ out.toByteArray shouldBe Array(65)  // Should output 'A' then halt
       out.toByteArray shouldBe Array(42)
     }
     
+    "execute conditional move with unknown condition and computed a value" in {
+      import UMOps._
+      // Test that ConditionalMove handles non-RegisterAccess 'a' values
+      // A = B + C (Addition, not RegisterAccess)
+      // D = input (unknown at compile time)
+      // Conditional move: if (D != 0) { A = E } else { A = A }
+      // If input is 0: A = B + C = 10 + 20 = 30
+      // If input is non-zero: A = E = 99
+      
+      val prog = Array(
+        B := 10,
+        C := 20,
+        A := B + C,      // A = 30 (Addition computation)
+        UMOps.input(D), // D = input (unknown)
+        E := 99,
+        A := E when D,  // if D != 0, A = E; else A stays as Addition
+        UMOps.output(A),
+        halt
+      )
+      
+      // Test with non-zero input
+      val out1 = new ByteArrayOutputStream()
+      val machine1 = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array(1)), out1)
+      machine1.run()
+      out1.toByteArray shouldBe Array(99)
+      
+      // Test with zero input  
+      val out2 = new ByteArrayOutputStream()
+      val machine2 = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array(0)), out2)
+      machine2.run()
+      out2.toByteArray shouldBe Array(30)
+    }
+    
     "execute array operations" in {
       import UMOps._
       val prog = Array(
@@ -925,7 +958,7 @@ out.toByteArray shouldBe Array(65)  // Should output 'A' then halt
     
     "division by zero fails" in {
       import UMOps._
-      val prog = Array(B := 0, A := A / B, halt)
+      val prog = Array(B := 0, A := A / B, output(A), halt)
       val out = new ByteArrayOutputStream()
       
       val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)

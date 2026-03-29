@@ -580,18 +580,14 @@ case class Block(
         } else {
           // Unknown condition, need runtime check
           generateComputation(mv, c)
-          val skipMove = new Label()
-          mv.visitJumpInsn(IFEQ, skipMove)
+          val useA = new Label()
+          val done = new Label()
+          mv.visitJumpInsn(IFEQ, useA)
           generateComputation(mv, b)
-          mv.visitVarInsn(ALOAD, 1)
-          mv.visitInsn(SWAP)
-          mv.visitIntInsn(BIPUSH, a match {
-            case RegisterAccess(r) => r
-            case _ => throw new IllegalStateException(s"ConditionalMove target must be RegisterAccess, got $a")
-          })
-          mv.visitInsn(SWAP)
-          mv.visitInsn(IASTORE)
-          mv.visitLabel(skipMove)
+          mv.visitJumpInsn(GOTO, done)
+          mv.visitLabel(useA)
+          generateComputation(mv, a)
+          mv.visitLabel(done)
         }
       
       case ArrayIndex(a, b, c) =>
