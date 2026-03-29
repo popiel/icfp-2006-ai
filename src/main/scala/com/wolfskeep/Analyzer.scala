@@ -1,7 +1,7 @@
 package com.wolfskeep
 
 import scala.collection.immutable.SortedMap
-import org.objectweb.asm.{ClassWriter, MethodVisitor, Opcodes}
+import org.objectweb.asm.{ClassWriter, MethodVisitor, Opcodes, Label}
 import org.objectweb.asm.Opcodes._
 import Instruction._
 
@@ -9,14 +9,17 @@ sealed trait PossibleValues {
   def isZero: Boolean
   def notZero: Boolean
   def maybeZero = !isZero && !notZero
+  def toFiniteList: Option[List[Int]]
 }
 case class PossibleValuesSet(values: Set[Int]) extends PossibleValues {
   def isZero = values == Set(0)
   def notZero = !values.contains(0)
+  def toFiniteList: Option[List[Int]] = if (values.size < 10) Some(values.toList) else None
 }
 case class PossibleValuesRange(range: Range) extends PossibleValues {
   def isZero = range == (0 to 0)
   def notZero = !range.contains(0)
+  def toFiniteList: Option[List[Int]] = if (range.length < 10) Some(range.toList) else None
 }
 
 sealed trait Instruction
@@ -202,9 +205,9 @@ case class ConditionalMove(a: Computation, b: Computation, c: Computation) exten
   case class LoadProgram(
     b: Computation,
     c: Computation,
-    written: Map[Int, Computation]
+    registersAfter: Array[Computation]
   ) extends Effect
-  case class Jump(c: Computation, written: Map[Int, Computation]) extends Effect
+  case class Jump(c: Computation, registersAfter: Array[Computation]) extends Effect
   case class Orthography(v: Int) extends Computation {
     def knownValues = Some(PossibleValuesSet(Set(v)))
   }
@@ -222,21 +225,46 @@ object Block {
   }
 }
 
-case class Block(
+case class Span(
   start: Int,
   end: Int,
+  initialRegisters: Array[Computation],
   effects: List[Effect]
 ) {
+  def isUsableFor(regs: Array[Computation]): Boolean = {
+    (0 until 8).forall { i =>
+      val spanComp = initialRegisters(i)
+      val jumpComp = regs(i)
+      spanComp == jumpComp || spanComp.knownValues.isEmpty
+    }
+  }
+  
+  def knownValuesAt(i: Int): Option[PossibleValues] = initialRegisters(i).knownValues
+}
+
+case class Block(
+  entry: Int,
+  spans: List[Span]
+) {
+  require(spans.nonEmpty, "Block must have at least one span")
+  
   private var compiledBlock: CompiledBlock = _
+  
+  def start: Int = spans.map(_.start).min
+  def end: Int = spans.map(_.end).max
   
   def compile(): CompiledBlock = synchronized {
     if (compiledBlock != null) return compiledBlock
-    
+    compiledBlock = doCompile()
+    compiledBlock
+  }
+  
+  private def doCompile(): CompiledBlock = {
     import org.objectweb.asm.{ClassWriter, MethodVisitor, Label}
     import org.objectweb.asm.Opcodes._
     
     val seqNum = Block.nextSeqNum()
-    val className = s"CompiledBlock_${start}_${end}_$seqNum"
+    val className = s"CompiledBlock_${entry}_${end}_$seqNum"
     val cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS)
     
     cw.visit(V1_8, ACC_PUBLIC, className, null, "java/lang/Object", Array("com/wolfskeep/CompiledBlock"))
@@ -246,7 +274,7 @@ case class Block(
     cw.visitField(ACC_PUBLIC, "end", "I", null, null).visitEnd()
     
     // Constructor
-    var mv = cw.visitMethod(ACC_PUBLIC, "<init>", "()V", null, null)
+    val mv = cw.visitMethod(ACC_PUBLIC, "<init>", "()V", null, null)
     mv.visitCode()
     mv.visitVarInsn(ALOAD, 0)
     mv.visitMethodInsn(INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
@@ -261,37 +289,48 @@ case class Block(
     mv.visitEnd()
     
     // start() getter method
-    mv = cw.visitMethod(ACC_PUBLIC, "start", "()I", null, null)
-    mv.visitCode()
-    mv.visitVarInsn(ALOAD, 0)
-    mv.visitFieldInsn(GETFIELD, className, "start", "I")
-    mv.visitInsn(IRETURN)
-    mv.visitMaxs(0, 0)
-    mv.visitEnd()
+    val mvStart = cw.visitMethod(ACC_PUBLIC, "start", "()I", null, null)
+    mvStart.visitCode()
+    mvStart.visitVarInsn(ALOAD, 0)
+    mvStart.visitFieldInsn(GETFIELD, className, "start", "I")
+    mvStart.visitInsn(IRETURN)
+    mvStart.visitMaxs(0, 0)
+    mvStart.visitEnd()
     
     // end() getter method
-    mv = cw.visitMethod(ACC_PUBLIC, "end", "()I", null, null)
-    mv.visitCode()
-    mv.visitVarInsn(ALOAD, 0)
-    mv.visitFieldInsn(GETFIELD, className, "end", "I")
-    mv.visitInsn(IRETURN)
-    mv.visitMaxs(0, 0)
-    mv.visitEnd()
+    val mvEnd = cw.visitMethod(ACC_PUBLIC, "end", "()I", null, null)
+    mvEnd.visitCode()
+    mvEnd.visitVarInsn(ALOAD, 0)
+    mvEnd.visitFieldInsn(GETFIELD, className, "end", "I")
+    mvEnd.visitInsn(IRETURN)
+    mvEnd.visitMaxs(0, 0)
+    mvEnd.visitEnd()
     
-    // run method
-    mv = cw.visitMethod(ACC_PUBLIC, "run", "([I)I", null, null)
-    mv.visitCode()
+    // Find entry span (start == entry and knownValues are all None/RegisterAccess)
+    val entrySpan = spans.find(_.start == entry).getOrElse(spans.head)
     
-    // Generate bytecode for each effect
-    for (effect <- effects) {
-      generateEffect(mv, effect, className)
+    // Create labels for each span
+    val spanLabels = spans.map(span => span -> new Label()).toMap
+    
+    // Generate run method
+    val mvRun = cw.visitMethod(ACC_PUBLIC, "run", "([I)I", null, null)
+    mvRun.visitCode()
+    
+    // Jump to entry span
+    mvRun.visitJumpInsn(GOTO, spanLabels(entrySpan))
+    
+    // Generate bytecode for each span
+    spans.foreach { span =>
+      val label = spanLabels(span)
+      mvRun.visitLabel(label)
+      generateSpanBytecode(mvRun, span, spanLabels, className)
     }
     
-    // If we reach here without returning, return -1 (shouldn't happen for valid blocks)
-    mv.visitInsn(ICONST_M1)
-    mv.visitInsn(IRETURN)
-    mv.visitMaxs(0, 0)
-    mv.visitEnd()
+    // Default: return -1 (should not reach here)
+    mvRun.visitInsn(ICONST_M1)
+    mvRun.visitInsn(IRETURN)
+    mvRun.visitMaxs(0, 0)
+    mvRun.visitEnd()
     
     cw.visitEnd()
     
@@ -307,12 +346,29 @@ case class Block(
       }
     }
     val clazz = loader.loadClass(className)
-    compiledBlock = clazz.newInstance().asInstanceOf[CompiledBlock]
-    compiledBlock
+    clazz.newInstance().asInstanceOf[CompiledBlock]
   }
   
-  private def generateEffect(mv: MethodVisitor, effect: Effect, className: String): Unit = {
-    import org.objectweb.asm.Label
+  private def generateSpanBytecode(
+    mv: MethodVisitor, 
+    span: Span, 
+    spanLabels: Map[Span, Label],
+    className: String
+  ): Unit = {
+    import org.objectweb.asm.Opcodes._
+    
+    // Generate effects for this span
+    span.effects.foreach { effect =>
+      generateEffect(mv, effect, className, spanLabels)
+    }
+  }
+  
+  private def generateEffect(
+    mv: MethodVisitor, 
+    effect: Effect, 
+    className: String,
+    spanLabels: Map[Span, Label]
+  ): Unit = {
     import org.objectweb.asm.Opcodes._
     
     effect match {
@@ -320,38 +376,62 @@ case class Block(
         mv.visitInsn(ICONST_M1)
         mv.visitInsn(IRETURN)
       
-      case LoadProgram(b, c, written) =>
-        // Store written values to registers
-        for ((reg, comp) <- written) {
-          generateComputation(mv, comp)
-          mv.visitVarInsn(ALOAD, 1)
-          mv.visitIntInsn(BIPUSH, reg)
-          mv.visitInsn(SWAP)
-          mv.visitInsn(IASTORE)
+      case Jump(c, regsAfter) =>
+        c.knownValues.flatMap(_.toFiniteList) match {
+          case None =>
+            throw new IllegalStateException(s"Jump with too many or unknown targets at compile time")
+          case Some(targets) if targets.size >= 10 =>
+            throw new IllegalStateException(s"Jump with ${targets.size} targets at compile time (should be LoadProgram)")
+          case Some(targets) =>
+            if (targets.size == 1) {
+              // Single target: unconditional jump
+              val targetValue = targets.head
+              val targetSpan = findSpanForTarget(targetValue, regsAfter)
+                .getOrElse(throw new IllegalStateException(s"No span found for target $targetValue"))
+              syncRegisters(mv, regsAfter, targetSpan, className)
+              mv.visitJumpInsn(GOTO, spanLabels(targetSpan))
+            } else {
+              // Multiple targets: compare and jump
+              targets.foreach { targetValue =>
+                val targetSpan = findSpanForTarget(targetValue, regsAfter)
+                  .getOrElse(throw new IllegalStateException(s"No span found for target $targetValue"))
+                generateComputation(mv, c)
+                mv.visitLdcInsn(targetValue)
+                val skipLabel = new Label()
+                mv.visitJumpInsn(IF_ICMPNE, skipLabel)
+                // Sync registers before jumping
+                syncRegisters(mv, regsAfter, targetSpan, className)
+                mv.visitJumpInsn(GOTO, spanLabels(targetSpan))
+                mv.visitLabel(skipLabel)
+              }
+              // No matching target - should not happen at runtime, return error
+              mv.visitInsn(ICONST_M1)
+              mv.visitInsn(IRETURN)
+            }
         }
-        // Call MachineState.loadProgram(b_value)
+      
+      case LoadProgram(b, c, regsAfter) =>
+        // Store written values to registers
+        for (i <- 0 until 8) {
+          val comp = regsAfter(i)
+          if (!comp.isInstanceOf[RegisterAccess] || comp.asInstanceOf[RegisterAccess].r != i) {
+            generateComputation(mv, comp)
+            mv.visitVarInsn(ALOAD, 1)
+            mv.visitInsn(SWAP)
+            mv.visitIntInsn(BIPUSH, i)
+            mv.visitInsn(SWAP)
+            mv.visitInsn(IASTORE)
+          }
+        }
         generateComputation(mv, b)
         mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "loadProgram", "(I)V", false)
-        // Return c value
         generateComputation(mv, c)
         mv.visitInsn(IRETURN)
       
-      case Jump(c, written) =>
-        // Store written values to registers
-        for ((reg, comp) <- written) {
-          generateComputation(mv, comp)
-          mv.visitVarInsn(ALOAD, 1)
-          mv.visitIntInsn(BIPUSH, reg)
-          mv.visitInsn(SWAP)
-          mv.visitInsn(IASTORE)
-        }
-        // Return c value (no need to call loadProgram since b is known zero)
-        generateComputation(mv, c)
-        mv.visitInsn(IRETURN)
-      
+      // ... other effects remain the same
       case ArrayIndex(a, b, c) =>
         generateComputation(mv, b)
-        mv.visitFieldInsn(GETSTATIC, "com/wolfskeep/MachineState", "arrays", "[[I")
+        mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "arrays", "()[[I", false)
         mv.visitInsn(SWAP)
         mv.visitInsn(AALOAD)
         generateComputation(mv, c)
@@ -371,7 +451,7 @@ case class Block(
           mv.visitLdcInsn(finger)
           mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "amendArray", "(IIII)V", false)
         } else if (a.knownValues.exists(_.notZero)) {
-          mv.visitFieldInsn(GETSTATIC, "com/wolfskeep/MachineState", "arrays", "[[I")
+          mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "arrays", "()[[I", false)
           mv.visitInsn(SWAP)
           mv.visitInsn(AALOAD)
           generateComputation(mv, b)
@@ -389,7 +469,7 @@ case class Block(
           mv.visitJumpInsn(GOTO, done)
           
           mv.visitLabel(notZero)
-          mv.visitFieldInsn(GETSTATIC, "com/wolfskeep/MachineState", "arrays", "[[I")
+          mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "arrays", "()[[I", false)
           mv.visitInsn(SWAP)
           mv.visitInsn(AALOAD)
           generateComputation(mv, b)
@@ -400,7 +480,6 @@ case class Block(
         }
       
       case Allocation(b, size) =>
-        // Call MachineState.allocateArray(size) and store result in register b
         generateComputation(mv, size)
         mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "allocateArray", "(I)I", false)
         mv.visitVarInsn(ALOAD, 1)
@@ -427,8 +506,37 @@ case class Block(
     }
   }
   
+  private def findSpanForTarget(target: Int, regsAfter: Array[Computation]): Option[Span] = {
+    spans.find { span =>
+      span.start == target && span.isUsableFor(regsAfter)
+    }
+  }
+  
+  private def syncRegisters(
+    mv: MethodVisitor, 
+    regsAfter: Array[Computation], 
+    targetSpan: Span,
+    className: String
+  ): Unit = {
+    import org.objectweb.asm.Opcodes._
+    
+    // For each register, if targetSpan has RegisterAccess for that register,
+    // we need to write the value from regsAfter
+    for (i <- 0 until 8) {
+      val targetComp = targetSpan.initialRegisters(i)
+      if (targetComp.knownValues.isEmpty) {
+        // Target expects RegisterAccess, we need to write the value
+        generateComputation(mv, regsAfter(i))
+        mv.visitVarInsn(ALOAD, 1)
+        mv.visitInsn(SWAP)
+        mv.visitIntInsn(BIPUSH, i)
+        mv.visitInsn(SWAP)
+        mv.visitInsn(IASTORE)
+      }
+    }
+  }
+  
   private def generateComputation(mv: MethodVisitor, comp: Computation): Unit = {
-    import org.objectweb.asm.Label
     import org.objectweb.asm.Opcodes._
     
     comp match {
@@ -436,7 +544,6 @@ case class Block(
         mv.visitLdcInsn(v)
       
       case RegisterAccess(r) =>
-        // Load registers[r]
         mv.visitVarInsn(ALOAD, 1)
         mv.visitIntInsn(BIPUSH, r)
         mv.visitInsn(IALOAD)
@@ -447,30 +554,14 @@ case class Block(
         mv.visitInsn(IADD)
       
       case Multiplication(b, c) =>
-        // Unsigned multiplication
         generateComputation(mv, b)
-        mv.visitInsn(I2L)
-        mv.visitLdcInsn(0xFFFFFFFFL)
-        mv.visitInsn(LAND)
         generateComputation(mv, c)
-        mv.visitInsn(I2L)
-        mv.visitLdcInsn(0xFFFFFFFFL)
-        mv.visitInsn(LAND)
-        mv.visitInsn(LMUL)
-        mv.visitInsn(L2I)
+        mv.visitInsn(IMUL)
       
       case Division(b, c) =>
-        // Unsigned division
         generateComputation(mv, b)
-        mv.visitInsn(I2L)
-        mv.visitLdcInsn(0xFFFFFFFFL)
-        mv.visitInsn(LAND)
         generateComputation(mv, c)
-        mv.visitInsn(I2L)
-        mv.visitLdcInsn(0xFFFFFFFFL)
-        mv.visitInsn(LAND)
-        mv.visitInsn(LDIV)
-        mv.visitInsn(L2I)
+        mv.visitInsn(IDIV)
       
       case Nand(b, c) =>
         generateComputation(mv, b)
@@ -480,26 +571,32 @@ case class Block(
         mv.visitInsn(IXOR)
       
       case ConditionalMove(a, b, c) =>
-        // Optimize based on knownValues
-        if (c.knownValues.exists(_.isZero)) {
+        if (c.knownValues.isZero) {
+          // Condition is always false, just return a
           generateComputation(mv, a)
-        } else if (c.knownValues.exists(_.notZero)) {
+        } else if (c.knownValues.notZero) {
+          // Condition is always true, just return b
           generateComputation(mv, b)
         } else {
-          val useA = new Label()
-          val done = new Label()
+          // Unknown condition, need runtime check
           generateComputation(mv, c)
-          mv.visitJumpInsn(IFEQ, useA)
+          val skipMove = new Label()
+          mv.visitJumpInsn(IFEQ, skipMove)
           generateComputation(mv, b)
-          mv.visitJumpInsn(GOTO, done)
-          mv.visitLabel(useA)
-          generateComputation(mv, a)
-          mv.visitLabel(done)
+          mv.visitVarInsn(ALOAD, 1)
+          mv.visitInsn(SWAP)
+          mv.visitIntInsn(BIPUSH, a match {
+            case RegisterAccess(r) => r
+            case _ => throw new IllegalStateException(s"ConditionalMove target must be RegisterAccess, got $a")
+          })
+          mv.visitInsn(SWAP)
+          mv.visitInsn(IASTORE)
+          mv.visitLabel(skipMove)
         }
       
       case ArrayIndex(a, b, c) =>
         generateComputation(mv, b)
-        mv.visitFieldInsn(GETSTATIC, "com/wolfskeep/MachineState", "arrays", "[[I")
+        mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "arrays", "()[[I", false)
         mv.visitInsn(SWAP)
         mv.visitInsn(AALOAD)
         generateComputation(mv, c)
@@ -520,12 +617,10 @@ case class Block(
         mv.visitInsn(IASTORE)
       
       case Input(c) =>
-        mv.visitMethodInsn(INVOKESTATIC, "com/wolfskeep/MachineState", "readInput", "()I", false)
+        // Input as Computation reads from the register (the effect already stored the input value)
         mv.visitVarInsn(ALOAD, 1)
-        mv.visitInsn(SWAP)
         mv.visitIntInsn(BIPUSH, c)
-        mv.visitInsn(SWAP)
-        mv.visitInsn(IASTORE)
+        mv.visitInsn(IALOAD)
     }
   }
 }
@@ -537,10 +632,48 @@ trait CompiledBlock {
 }
 
 class Analyzer(val prog: Array[Int]) {
-  val blocks: SortedMap[Int, Block] = SortedMap.empty
-  val compiled: Map[Int, CompiledBlock] = Map.empty
-
-  def from(finger: Int, registers: Array[Computation]): Block = {
+  def from(entry: Int, initialRegisters: Array[Computation]): Block = {
+    import scala.collection.mutable
+    
+    val spans = mutable.ListBuffer[Span]()
+    val worklist = mutable.Queue[(Int, Array[Computation])]()
+    worklist.enqueue((entry, initialRegisters))
+    
+    while (worklist.nonEmpty) {
+      val (startPos, regs) = worklist.dequeue()
+      
+      // Check if a usable span already exists
+      spans.find(_.isUsableFor(regs)) match {
+        case Some(_) => // Span already covers this, skip
+        case None =>
+          // Analyze new span
+          val (endPos, effects, regsAfter) = analyzeSpan(startPos, regs)
+          val newSpan = Span(startPos, endPos, regs, effects)
+          spans += newSpan
+          
+          // Queue follow-up scans for Jump targets
+          if (effects.nonEmpty) {
+            effects.last match {
+              case Jump(c, regsAfterArr) =>
+                c.knownValues.flatMap(_.toFiniteList) match {
+                  case None => // Shouldn't happen - Jump with too many targets
+                  case Some(targets) =>
+                    targets.foreach { target =>
+                      worklist.enqueue((target, regsAfterArr))
+                    }
+                }
+              case LoadProgram(_, _, _) => // No follow-up
+              case Halt => // No follow-up
+              case _ => // Other effects - shouldn't be at end
+            }
+          }
+      }
+    }
+    
+    Block(entry, spans.toList)
+  }
+  
+  private def analyzeSpan(finger: Int, registers: Array[Computation]): (Int, List[Effect], Array[Computation]) = {
     require(registers.length == 8)
     require(registers.forall(_ != null))
     
@@ -594,7 +727,11 @@ class Analyzer(val prog: Array[Int]) {
             touched = touched + a
             pos += 1
           case 7 =>
-            return Block(finger, pos, effects :+ Halt)
+            val regsAfter = Array.tabulate(8)(i => touched match {
+              case t if t.contains(i) => regs(i)
+              case _ => RegisterAccess(i)
+            })
+            return (pos, effects :+ Halt, regsAfter)
           case 8 =>
             effects = effects :+ Allocation(b, regs(c))
             regs(b) = RegisterAccess(b)
@@ -608,20 +745,27 @@ class Analyzer(val prog: Array[Int]) {
             pos += 1
           case 11 =>
             effects = effects :+ Input(c)
-            regs(c) = RegisterAccess(c)
+            regs(c) = Input(c)
             touched = touched + c
             pos += 1
           case 12 =>
-            val written = touched.map(r => r -> regs(r)).toMap
+            val regsAfter = regs.clone()
             if (regs(b).knownValues.exists(_.isZero)) {
               // b is known to be zero - just jump, don't load program
-              return Block(finger, pos, effects :+ Jump(regs(c), written))
+              return (pos, effects :+ Jump(regs(c), regsAfter), regsAfter)
             } else {
-              return Block(finger, pos, effects :+ LoadProgram(regs(b), regs(c), written))
+              // b is non-zero or unknown - must use LoadProgram
+              return (pos, effects :+ LoadProgram(regs(b), regs(c), regsAfter), regsAfter)
             }
+          case _ =>
+            // Illegal opcode - treat as halt
+            val regsAfter = Array.tabulate(8)(i => 
+              if (touched.contains(i)) regs(i) else RegisterAccess(i)
+            )
+            return (pos, effects :+ Halt, regsAfter)
         }
       }
     }
-    Block(finger, prog.length - 1, effects)
+    (prog.length - 1, effects, Array.tabulate(8)(i => RegisterAccess(i)))
   }
 }

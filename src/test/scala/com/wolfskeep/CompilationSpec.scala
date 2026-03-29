@@ -240,7 +240,8 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
   
   "Block compilation" should {
     "create CompiledBlock with correct start and end" in {
-      val block = Block(10, 20, List(Halt))
+      val span = Span(10, 20, initialRegisters, List(Halt))
+      val block = Block(10, List(span))
       val compiled = block.compile()
       
       compiled.start shouldBe 10
@@ -248,7 +249,8 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
     }
     
     "compile Halt effect to return -1" in {
-      val block = Block(0, 0, List(Halt))
+      val span = Span(0, 0, initialRegisters, List(Halt))
+      val block = Block(0, List(span))
       val compiled = block.compile()
       val registers = new Array[Int](8)
       
@@ -256,9 +258,8 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
     }
     
     "compile Orthography to load immediate value" in {
-      val block = Block(0, 0, List(
-        Halt
-      ))
+      val span = Span(0, 0, initialRegisters, List(Halt))
+      val block = Block(0, List(span))
       // Orthography is not an effect, it's a computation
       // We need to test it through a computation that uses it
     }
@@ -362,8 +363,8 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
       
       block.start shouldBe 0
       block.end shouldBe 1
-      block.effects should have size 1
-      block.effects.head shouldBe Halt
+      block.spans.head.effects should have size 1
+      block.spans.head.effects.head shouldBe Halt
     }
     
     "handle Addition instruction" in {
@@ -383,7 +384,7 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
       regs(2) = Orthography(10)
       
       val block = analyzer.from(0, regs)
-      block.effects.last shouldBe Halt
+      block.spans.head.effects.last shouldBe Halt
     }
     
     "track touched registers" in {
@@ -402,7 +403,8 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
   
   "CompiledBlock execution" should {
     "create valid compiled block" in {
-      val block = Block(0, 0, List(Halt))
+      val span = Span(0, 0, initialRegisters, List(Halt))
+      val block = Block(0, List(span))
       val compiled = block.compile()
       
       compiled.start shouldBe 0
@@ -537,7 +539,7 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
       regs(0) = Orthography(0)  // After first instruction, reg0 = 0
       
       val block = analyzer.from(1, regs)  // Start from second instruction
-      block.effects.head shouldBe a[Jump]
+      block.spans.head.effects.head shouldBe a[Jump]
     }
     
     "create LoadProgram when b is not known to be zero" in {
@@ -552,7 +554,7 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
       regs(0) = Input(0)  // After input, reg0 is unknown
       
       val block = analyzer.from(1, regs)  // Start from second instruction
-      block.effects.head shouldBe a[LoadProgram]
+      block.spans.head.effects.head shouldBe a[LoadProgram]
     }
     
     "create LoadProgram when b is known non-zero" in {
@@ -568,7 +570,7 @@ class CompilationSpec extends AnyWordSpec with Matchers with BeforeAndAfterEach 
       regs(0) = Orthography(5)  // After first instruction, reg0 = 5
       
       val block = analyzer.from(1, regs)
-      block.effects.head shouldBe a[LoadProgram]
+      block.spans.head.effects.head shouldBe a[LoadProgram]
     }
     
     "execute jump within program using loadProgram with b=0" in {
@@ -772,7 +774,7 @@ out.toByteArray shouldBe Array(65)  // Should output 'A' then halt
     
     "handle input" in {
       import UMOps._
-      val prog = Array(A := UMOps.input(A), UMOps.output(A), halt)
+      val prog = Array(UMOps.input(A), UMOps.output(A), halt)
       val inputBytes = Array[Byte](65)
       val out = new ByteArrayOutputStream()
       
@@ -784,7 +786,7 @@ out.toByteArray shouldBe Array(65)  // Should output 'A' then halt
     
     "return 0xFF on EOF" in {
       import UMOps._
-      val prog = Array(A := UMOps.input(A), UMOps.output(A), halt)
+      val prog = Array(UMOps.input(A), UMOps.output(A), halt)
       val out = new ByteArrayOutputStream()
       
       val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
@@ -918,7 +920,7 @@ out.toByteArray shouldBe Array(65)  // Should output 'A' then halt
       
       val machine = new CompiledUniversalMachine(prog, new ByteArrayInputStream(Array()), out)
       val thrown = the[RuntimeException] thrownBy { machine.run() }
-      thrown.getMessage should include("cannot abandon array 0")
+      thrown.getMessage should include("Cannot abandon array 0")
     }
     
     "division by zero fails" in {

@@ -292,7 +292,8 @@ class InstructionSpec extends AnyWordSpec with Matchers {
     "be an Effect" in {
       val b = Orthography(0)
       val c = Orthography(0)
-      LoadProgram(b, c, Map.empty) shouldBe an[Effect]
+      val regs = (0 to 7).map(i => RegisterAccess(i): Computation).toArray
+      LoadProgram(b, c, regs) shouldBe an[Effect]
     }
   }
 
